@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import type { Request } from 'express';
 import fs from 'fs';
 import path from 'path';
 
@@ -31,21 +32,69 @@ function cleanBaseUrl(value?: string): string {
   return cleanEnvValue(value).replace(/\/+$/, '');
 }
 
+function normalizeHostUrl(value?: string): string {
+  const cleaned = cleanBaseUrl(value);
+  if (!cleaned) return '';
+  if (/^https?:\/\//i.test(cleaned)) return cleaned;
+  return `https://${cleaned}`;
+}
+
+export function parseCloudinaryUrl(rawUrl?: string): {
+  cloudName: string;
+  apiKey: string;
+  apiSecret: string;
+} {
+  const cleaned = cleanEnvValue(rawUrl).replace(/^CLOUDINARY_URL\s*=\s*/i, '');
+  if (!cleaned) return { cloudName: '', apiKey: '', apiSecret: '' };
+  try {
+    const parsed = new URL(cleaned);
+    if (parsed.protocol !== 'cloudinary:') {
+      return { cloudName: '', apiKey: '', apiSecret: '' };
+    }
+    return {
+      cloudName: decodeURIComponent(parsed.hostname || '').trim(),
+      apiKey: decodeURIComponent(parsed.username || '').trim(),
+      apiSecret: decodeURIComponent(parsed.password || '').trim(),
+    };
+  } catch {
+    return { cloudName: '', apiKey: '', apiSecret: '' };
+  }
+}
+
+const fromCloudinaryUrl = parseCloudinaryUrl(process.env.CLOUDINARY_URL);
+const cloudinaryCloudName = cleanEnvValue(process.env.CLOUDINARY_CLOUD_NAME) || fromCloudinaryUrl.cloudName;
+const cloudinaryApiKey = cleanEnvValue(process.env.CLOUDINARY_API_KEY) || fromCloudinaryUrl.apiKey;
+const cloudinaryApiSecret = cleanEnvValue(process.env.CLOUDINARY_API_SECRET) || fromCloudinaryUrl.apiSecret;
+
+const explicitServerUrl =
+  cleanBaseUrl(process.env.SERVER_URL) ||
+  cleanBaseUrl(process.env.APP_URL) ||
+  cleanBaseUrl(process.env.RENDER_EXTERNAL_URL) ||
+  normalizeHostUrl(process.env.RAILWAY_PUBLIC_DOMAIN) ||
+  normalizeHostUrl(process.env.KOYEB_PUBLIC_DOMAIN) ||
+  (cleanEnvValue(process.env.FLY_APP_NAME) ? `https://${cleanEnvValue(process.env.FLY_APP_NAME)}.fly.dev` : '');
+
+const explicitClientUrl = cleanBaseUrl(process.env.CLIENT_URL) || cleanBaseUrl(process.env.APP_URL);
+const port = Number(process.env.PORT || 3000);
+
+export const hasExplicitServerUrlEnv = Boolean(explicitServerUrl);
+export const hasExplicitClientUrlEnv = Boolean(explicitClientUrl);
+
 export const env = {
-  port: Number(process.env.PORT || 3000),
+  port,
   nodeEnv: process.env.NODE_ENV || 'development',
   isProd: process.env.NODE_ENV === 'production',
   mongodbUri: cleanEnvValue(process.env.MONGODB_URI),
-  clientUrl: cleanBaseUrl(process.env.CLIENT_URL) || cleanBaseUrl(process.env.APP_URL) || 'http://localhost:3000',
-  serverUrl: cleanBaseUrl(process.env.SERVER_URL) || cleanBaseUrl(process.env.APP_URL) || 'http://localhost:3000',
+  clientUrl: explicitClientUrl || `http://localhost:${port}`,
+  serverUrl: explicitServerUrl || `http://localhost:${port}`,
   jwtAccessSecret: cleanEnvValue(process.env.JWT_ACCESS_SECRET) || fallbackAccessSecret,
   jwtRefreshSecret: cleanEnvValue(process.env.JWT_REFRESH_SECRET) || fallbackRefreshSecret,
   emailVerificationSecret: cleanEnvValue(process.env.EMAIL_VERIFICATION_SECRET) || fallbackEmailSecret,
   passwordResetSecret: cleanEnvValue(process.env.PASSWORD_RESET_SECRET) || fallbackResetSecret,
   adminSetupPasscode: cleanEnvValue(process.env.ADMIN_SETUP_PASSCODE),
-  cloudinaryCloudName: cleanEnvValue(process.env.CLOUDINARY_CLOUD_NAME),
-  cloudinaryApiKey: cleanEnvValue(process.env.CLOUDINARY_API_KEY),
-  cloudinaryApiSecret: cleanEnvValue(process.env.CLOUDINARY_API_SECRET),
+  cloudinaryCloudName,
+  cloudinaryApiKey,
+  cloudinaryApiSecret,
   brevoApiKey: cleanBrevoApiKey(process.env.BREVO_API_KEY),
   brevoSenderEmail:
     cleanEnvValue(process.env.BREVO_SENDER_EMAIL).replace(/^BREVO_SENDER_EMAIL\s*=\s*/i, '').trim() ||
@@ -56,8 +105,55 @@ export const env = {
   brevoWebhookSecret: cleanEnvValue(process.env.BREVO_WEBHOOK_SECRET),
 };
 
+const missingCloudinaryVars: string[] = [];
+if (!cloudinaryCloudName) missingCloudinaryVars.push('CLOUDINARY_CLOUD_NAME');
+if (!cloudinaryApiKey) missingCloudinaryVars.push('CLOUDINARY_API_KEY');
+if (!cloudinaryApiSecret) missingCloudinaryVars.push('CLOUDINARY_API_SECRET');
+
+export const cloudinaryMeta = {
+  configured: Boolean(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret),
+  cloudName: cloudinaryCloudName,
+  source: (Boolean(cloudinaryCloudName && cloudinaryApiKey && cloudinaryApiSecret)
+    ? Boolean(
+        cleanEnvValue(process.env.CLOUDINARY_CLOUD_NAME) &&
+          cleanEnvValue(process.env.CLOUDINARY_API_KEY) &&
+          cleanEnvValue(process.env.CLOUDINARY_API_SECRET)
+      )
+      ? 'env_vars'
+      : 'cloudinary_url'
+    : 'none') as 'env_vars' | 'cloudinary_url' | 'none',
+  missingVars: missingCloudinaryVars,
+};
+
 export const integrationStatus = {
   mongodbConfigured: Boolean(env.mongodbUri),
-  cloudinaryConfigured: Boolean(env.cloudinaryCloudName && env.cloudinaryApiKey && env.cloudinaryApiSecret),
+  cloudinaryConfigured: cloudinaryMeta.configured,
   brevoConfigured: Boolean(env.brevoApiKey),
 };
+
+export function resolveRequestOrigin(req?: Pick<Request, 'headers' | 'protocol' | 'get'>): string | undefined {
+  if (!req) return undefined;
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
+    .split(',')[0]
+    .trim();
+  const forwardedHost = String(req.headers['x-forwarded-host'] || req.get('host') || '')
+    .split(',')[0]
+    .trim();
+  if (!forwardedHost) return undefined;
+  return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+}
+
+export function resolveClientOrigin(req?: Pick<Request, 'headers' | 'get'>): string | undefined {
+  if (!req) return undefined;
+  const rawOrigin = String(req.get('origin') || req.headers.origin || '').trim();
+  if (!rawOrigin) return undefined;
+  try {
+    const parsed = new URL(rawOrigin);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.origin.replace(/\/+$/, '');
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}

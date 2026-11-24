@@ -1,5 +1,11 @@
 import axios, { type AxiosInstance } from 'axios';
-import { env, integrationStatus } from './env.ts';
+import {
+  cloudinaryMeta,
+  env,
+  hasExplicitClientUrlEnv,
+  hasExplicitServerUrlEnv,
+  integrationStatus,
+} from './env.ts';
 import { db } from '../store/dataLayer.ts';
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -15,13 +21,21 @@ export function parseSenderAddress(rawFrom: string, defaultName: string): { emai
   return { email: rawFrom.trim(), name: defaultName };
 }
 
-export function getEffectiveEmailConfig() {
+export function getEffectiveEmailConfig(requestOrigin?: string, clientOrigin?: string) {
   const settings = db.getPlatformSettings();
   const rawFromEmail = settings.brevoSenderEmail?.trim() || env.brevoSenderEmail;
   const rawFromName = settings.brevoSenderName?.trim() || env.brevoSenderName;
   const sender = parseSenderAddress(rawFromEmail, rawFromName);
-  const clientUrl = (settings.clientUrl?.trim() || env.clientUrl).replace(/\/+$/, '');
-  const serverUrl = (settings.serverUrl?.trim() || env.serverUrl).replace(/\/+$/, '');
+
+  const fallbackClientUrl = hasExplicitClientUrlEnv
+    ? env.clientUrl
+    : clientOrigin || requestOrigin || env.clientUrl;
+  const fallbackServerUrl = hasExplicitServerUrlEnv
+    ? env.serverUrl
+    : requestOrigin || env.serverUrl;
+
+  const clientUrl = (settings.clientUrl?.trim() || fallbackClientUrl).replace(/\/+$/, '');
+  const serverUrl = (settings.serverUrl?.trim() || fallbackServerUrl).replace(/\/+$/, '');
 
   return {
     apiKey: env.brevoApiKey,
@@ -58,8 +72,8 @@ export function createBrevoClient(apiKeyOverride?: string): AxiosInstance {
   });
 }
 
-export function getEmailDiagnostics() {
-  const cfg = getEffectiveEmailConfig();
+export function getEmailDiagnostics(requestOrigin?: string, clientOrigin?: string) {
+  const cfg = getEffectiveEmailConfig(requestOrigin, clientOrigin);
   const key = cfg.apiKey;
   const apiKeyHint = key
     ? key.length > 10
@@ -69,6 +83,12 @@ export function getEmailDiagnostics() {
   const apiKeyStartsWithXkeysib = Boolean(key && key.startsWith('xkeysib-'));
   const apiKeyFormatValid = Boolean(key && apiKeyStartsWithXkeysib && key.length >= 40);
   const defaultSender = parseSenderAddress(env.brevoSenderEmail, env.brevoSenderName);
+  const envDefaultClientUrl = hasExplicitClientUrlEnv
+    ? env.clientUrl
+    : clientOrigin || requestOrigin || env.clientUrl;
+  const envDefaultServerUrl = hasExplicitServerUrlEnv
+    ? env.serverUrl
+    : requestOrigin || env.serverUrl;
 
   return {
     provider: 'brevo' as const,
@@ -90,10 +110,11 @@ export function getEmailDiagnostics() {
       fromEmail: defaultSender.email,
       fromName: defaultSender.name,
       brevoBaseUrl: env.brevoBaseUrl,
-      clientUrl: env.clientUrl,
-      serverUrl: env.serverUrl,
+      clientUrl: envDefaultClientUrl,
+      serverUrl: envDefaultServerUrl,
     },
     integrationStatus,
+    cloudinaryDetails: cloudinaryMeta,
     serverRuntime: {
       nodeEnv: env.nodeEnv,
       port: env.port,

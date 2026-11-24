@@ -4,7 +4,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { z } from 'zod';
-import { env, integrationStatus } from './config/env.ts';
+import { env, hasExplicitServerUrlEnv, integrationStatus, resolveRequestOrigin } from './config/env.ts';
 import adminRoutes from './routes/adminRoutes.ts';
 import applicationRoutes, { recruiterAppRouter } from './routes/applicationRoutes.ts';
 import authRoutes from './routes/authRoutes.ts';
@@ -150,15 +150,17 @@ export function createExpressApp() {
   });
 
   // Dynamic SEO Sitemap & Robots
-  app.get('/robots.txt', (_req, res) => {
-    const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || env.serverUrl).replace(/\/+$/, '');
+  app.get('/robots.txt', (req, res) => {
+    const fallbackUrl = hasExplicitServerUrlEnv ? env.serverUrl : resolveRequestOrigin(req) || env.serverUrl;
+    const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || fallbackUrl).replace(/\/+$/, '');
     res.type('text/plain').send(
       `User-agent: *\nAllow: /\nDisallow: /candidate/\nDisallow: /recruiter/\nDisallow: /admin/\nSitemap: ${activeServerUrl}/sitemap.xml\n`
     );
   });
 
-  app.get('/sitemap.xml', async (_req, res) => {
-    const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || env.serverUrl).replace(/\/+$/, '');
+  app.get('/sitemap.xml', async (req, res) => {
+    const fallbackUrl = hasExplicitServerUrlEnv ? env.serverUrl : resolveRequestOrigin(req) || env.serverUrl;
+    const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || fallbackUrl).replace(/\/+$/, '');
     const jobs = (await db.listJobs()).filter((j) => j.status === 'published');
     const urls = [
       `${activeServerUrl}/`,

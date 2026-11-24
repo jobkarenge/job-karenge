@@ -3,8 +3,24 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, getApiErrorMessage, getBackendOrigin } from '../../services/api';
 import { formatShortDate } from '../../utils/formatters';
+
+function resolveDisplayedWebhookUrl(rawUrl?: string): string {
+  const trimmed = (rawUrl || '').trim();
+  const backendOrigin = getBackendOrigin();
+  if (trimmed && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(trimmed)) {
+    return trimmed;
+  }
+  if (backendOrigin) {
+    return `${backendOrigin}/api/email/webhooks/brevo`;
+  }
+  if (trimmed) return trimmed;
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}/api/email/webhooks/brevo`;
+  }
+  return '/api/email/webhooks/brevo';
+}
 
 interface CampaignRow {
   _id: string;
@@ -70,6 +86,12 @@ interface EmailDiagnostics {
     mongodbConfigured: boolean;
     cloudinaryConfigured: boolean;
     brevoConfigured: boolean;
+  };
+  cloudinaryDetails?: {
+    configured: boolean;
+    cloudName?: string;
+    source?: 'env_vars' | 'cloudinary_url' | 'none';
+    missingVars?: string[];
   };
   serverRuntime?: {
     nodeEnv: string;
@@ -285,7 +307,7 @@ export function AdminCampaignsPage() {
                 </span>
               </p>
               <p className="text-slate-500 dark:text-slate-400">
-                Webhook URL: <span className="font-mono">{diag.webhookEndpointUrl}</span>{' '}
+                Webhook URL: <span className="font-mono break-all">{resolveDisplayedWebhookUrl(diag.webhookEndpointUrl)}</span>{' '}
                 ({diag.webhookSecretConfigured ? 'secret protected' : 'no secret set'})
               </p>
               {diag.brevoConfigured && diag.apiKeyFormatValid === false && (
@@ -936,6 +958,9 @@ export function AdminGovernancePage() {
               <p className="text-slate-500">
                 Active Sender: <span className="font-mono">{diag.fromName} &lt;{diag.fromEmail}&gt;</span>
               </p>
+              <p className="text-slate-500 truncate" title={resolveDisplayedWebhookUrl(diag.webhookEndpointUrl)}>
+                Webhook: <span className="font-mono">{resolveDisplayedWebhookUrl(diag.webhookEndpointUrl)}</span>
+              </p>
               {diag.brevoConfigured && diag.apiKeyFormatValid === false && (
                 <p className="text-amber-700 dark:text-amber-400 font-medium">
                   Format notice: Brevo v3 keys typically start with <span className="font-mono">xkeysib-</span>.
@@ -960,11 +985,27 @@ export function AdminGovernancePage() {
                 <StatusIndicator status={diag.integrationStatus?.cloudinaryConfigured ? 'Active' : 'Pending'} />
               </div>
               <p className="text-slate-600 dark:text-slate-300">
-                {diag.integrationStatus?.cloudinaryConfigured ? 'Configured via server secrets' : 'Using local file uploads'}
+                {diag.integrationStatus?.cloudinaryConfigured
+                  ? `Configured via server ${diag.cloudinaryDetails?.source === 'cloudinary_url' ? 'CLOUDINARY_URL' : 'secrets'}`
+                  : 'Using local file uploads'}
               </p>
-              <p className="text-slate-500 truncate">
-                Webhook: <span className="font-mono">{diag.webhookEndpointUrl}</span>
-              </p>
+              {diag.integrationStatus?.cloudinaryConfigured ? (
+                diag.cloudinaryDetails?.cloudName && (
+                  <p className="text-slate-500">
+                    Cloud: <span className="font-mono">{diag.cloudinaryDetails.cloudName}</span>
+                  </p>
+                )
+              ) : (
+                <p className="text-slate-500">
+                  Set{' '}
+                  <span className="font-mono">
+                    {diag.cloudinaryDetails?.missingVars?.length
+                      ? diag.cloudinaryDetails.missingVars.join(', ')
+                      : 'CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET'}
+                  </span>{' '}
+                  or <span className="font-mono">CLOUDINARY_URL</span> in server env.
+                </p>
+              )}
             </div>
           </div>
 

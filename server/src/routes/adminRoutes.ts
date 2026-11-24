@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { integrationStatus } from '../config/env.ts';
+import { integrationStatus, resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import {
   fetchBrevoCampaignStatistics,
@@ -181,7 +181,9 @@ router.patch('/recruiters/:userId/verification', async (req: AuthenticatedReques
 
   const recruiterUser = await db.findUserById(userId);
   if (recruiterUser) {
-    const clientUrl = db.getPlatformSettings().clientUrl?.trim() || getEmailDiagnostics().clientUrl;
+    const clientUrl =
+      db.getPlatformSettings().clientUrl?.trim() ||
+      getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req)).clientUrl;
     await sendAccountNotificationEmail({
       user: recruiterUser,
       title: parsed.data.status === 'approved' ? 'Recruiter Account Verified' : 'Recruiter Verification Update',
@@ -445,7 +447,7 @@ router.get('/email-logs', async (_req, res) => {
 });
 
 router.get('/email-diagnostics', async (req, res) => {
-  const diag = getEmailDiagnostics();
+  const diag = getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req));
   let accountVerification: Awaited<ReturnType<typeof verifyBrevoAccount>> | null = null;
   if (req.query.verify === 'true' && diag.brevoConfigured) {
     accountVerification = await verifyBrevoAccount();
@@ -468,7 +470,7 @@ router.post('/test-email', async (req: AuthenticatedRequest, res) => {
   const to = (parsed.data.to || req.user!.email).trim().toLowerCase();
   const recipientUser =
     to === req.user!.email.toLowerCase() ? req.user! : await db.findUserByEmail(to);
-  const diag = getEmailDiagnostics();
+  const diag = getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req));
   const recipientName =
     recipientUser?.name &&
     recipientUser.name.trim().toLowerCase() !== diag.fromName.trim().toLowerCase() &&
@@ -520,13 +522,13 @@ function isOptionalHttpUrl(val?: string): boolean {
   }
 }
 
-router.get('/settings', async (_req, res) => {
+router.get('/settings', async (req, res) => {
   res.json({
     success: true,
     data: {
       settings: db.getPlatformSettings(),
       integrationStatus,
-      emailDiagnostics: getEmailDiagnostics(),
+      emailDiagnostics: getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req)),
     },
   });
 });
@@ -616,7 +618,7 @@ router.put('/settings', async (req: AuthenticatedRequest, res) => {
     message: 'Platform & environment settings updated.',
     data: {
       settings: updated,
-      emailDiagnostics: getEmailDiagnostics(),
+      emailDiagnostics: getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req)),
     },
   });
 });
