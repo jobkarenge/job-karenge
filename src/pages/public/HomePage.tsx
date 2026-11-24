@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { EmptyState, SkeletonList } from '../../components/common/UIPrimitives';
 import { JobCard } from '../../components/jobs/JobCard';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
 import type { Company, Job } from '../../types';
 
 interface CategoryItem {
@@ -343,7 +343,7 @@ export function HomePage() {
                   <div>
                     <div className="w-10 h-10 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 flex items-center justify-center text-[#102A43] dark:text-slate-200 overflow-hidden">
                       {comp.logoUrl ? (
-                        <img src={comp.logoUrl} alt={comp.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                        <img src={resolveApiAssetUrl(comp.logoUrl)} alt={comp.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                       ) : (
                         <Building2 className="w-5 h-5" />
                       )}

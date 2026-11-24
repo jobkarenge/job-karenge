@@ -1,6 +1,7 @@
 import { ArrowUpRight, Bookmark, Building2 } from 'lucide-react';
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { resolveApiAssetUrl } from '../../services/api';
 import type { Job } from '../../types';
 import { formatRelativeDate, formatSalaryRange, formatShortDate } from '../../utils/formatters';
 
@@ -23,7 +24,7 @@ export function JobCard({ job, isSaved, onToggleSave }: JobCardProps) {
             >
               {job.company?.logoUrl ? (
                 <img
-                  src={job.company.logoUrl}
+                  src={resolveApiAssetUrl(job.company.logoUrl)}
                   alt={job.companyName}
                   referrerPolicy="no-referrer"
                   className="w-11 h-11 rounded-lg object-cover border border-slate-200 dark:border-slate-800 bg-white hover:border-blue-500/60 transition-colors"

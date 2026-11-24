@@ -25,7 +25,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { EmptyState, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
-import { api, getAccessToken, getApiErrorMessage } from '../../services/api';
+import { api, getAccessToken, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
 import type { Application, ApplicationStatus, Company, Job } from '../../types';
 import { formatSalaryRange, formatShortDate } from '../../utils/formatters';
 
@@ -290,9 +290,10 @@ export function RecruiterApplicationsPage() {
       toast.error('No resume uploaded for this candidate.');
       return;
     }
+    const resolvedUrl = resolveApiAssetUrl(app.resumeUrl);
     if (app.resumeUrl.startsWith('http')) {
       const a = document.createElement('a');
-      a.href = app.resumeUrl;
+      a.href = resolvedUrl;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
       a.download = `${(app.candidate?.name || 'candidate').replace(/\s+/g, '-')}-resume.pdf`;
@@ -300,7 +301,7 @@ export function RecruiterApplicationsPage() {
       return;
     }
     try {
-      const res = await fetch(app.resumeUrl, {
+      const res = await fetch(resolvedUrl, {
         headers: { Authorization: `Bearer ${getAccessToken() || ''}` },
       });
       if (!res.ok) throw new Error('Unable to access resume PDF');
@@ -323,11 +324,10 @@ export function RecruiterApplicationsPage() {
       if (companyId) params.set('companyId', companyId);
       if (statusFilter) params.set('status', statusFilter);
 
-      const res = await fetch(`/api/recruiter/applications/export?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${getAccessToken() || ''}` },
+      const res = await api.get(`/recruiter/applications/export?${params.toString()}`, {
+        responseType: 'text',
       });
-      if (!res.ok) throw new Error('Failed to export application report');
-      const text = await res.text();
+      const text = typeof res.data === 'string' ? res.data : String(res.data || '');
       const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -562,7 +562,7 @@ export function RecruiterApplicationsPage() {
                       <div className="flex items-center gap-2.5 min-w-[140px]">
                         {app.company?.logoUrl ? (
                           <img
-                            src={app.company.logoUrl}
+                            src={resolveApiAssetUrl(app.company.logoUrl)}
                             alt={companyName}
                             referrerPolicy="no-referrer"
                             className="w-7 h-7 rounded-md object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-white"

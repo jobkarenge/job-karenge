@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { toast } from 'sonner';
-import { api, getAccessToken } from '../services/api';
+import { api, getAccessToken, getBackendOrigin } from '../services/api';
 import type { AppNotification } from '../types';
 import { useAuth } from './AuthContext';
 
@@ -78,7 +78,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       return;
     }
 
-    const socket: Socket = io({
+    const socket: Socket = io(getBackendOrigin(), {
       auth: (cb) => cb({ token: getAccessToken() }),
       transports: ['websocket', 'polling'],
       reconnection: true,

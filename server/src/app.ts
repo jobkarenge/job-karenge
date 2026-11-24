@@ -174,6 +174,14 @@ export function createExpressApp() {
     res.type('application/xml').send(xml);
   });
 
+  // Return JSON 404 for unknown API routes instead of falling through to SPA HTML
+  app.use('/api', (_req, res) => {
+    res.status(404).json({
+      success: false,
+      message: 'API endpoint not found.',
+    });
+  });
+
   // Centralized API error handler (including Multer file size/type errors)
   app.use('/api', (err: Error, _req: Request, res: Response, _next: NextFunction) => {
     console.error('[API Error]', err);

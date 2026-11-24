@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
 import type { Company, RecruiterProfile } from '../../types';
 
 const emptyNewCompany = {
@@ -359,7 +359,7 @@ export function RecruiterCompanyPage() {
               >
                 <div className="w-10 h-10 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                   {c.logoUrl ? (
-                    <img src={c.logoUrl} alt={c.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                    <img src={resolveApiAssetUrl(c.logoUrl)} alt={c.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                   ) : (
                     <Building2 className="w-5 h-5 text-slate-400" />
                   )}
@@ -383,7 +383,7 @@ export function RecruiterCompanyPage() {
             <div className="h-36 bg-slate-100 dark:bg-slate-800 relative">
               {selectedCompany.bannerUrl && (
                 <img
-                  src={selectedCompany.bannerUrl}
+                  src={resolveApiAssetUrl(selectedCompany.bannerUrl)}
                   alt={`${selectedCompany.name} banner`}
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover"
@@ -401,7 +401,7 @@ export function RecruiterCompanyPage() {
                 <div className="w-16 h-16 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                   {selectedCompany.logoUrl ? (
                     <img
-                      src={selectedCompany.logoUrl}
+                      src={resolveApiAssetUrl(selectedCompany.logoUrl)}
                       alt={selectedCompany.name}
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"

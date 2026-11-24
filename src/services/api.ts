@@ -1,25 +1,52 @@
 import axios from 'axios';
 
-function resolveBaseUrl(): string {
-  const raw = import.meta.env.VITE_API_URL?.trim();
-  if (!raw) return '/api';
+function cleanOriginAndPath(rawUrl?: string): { origin: string; basePath: string } | null {
+  const raw = rawUrl?.trim();
+  if (!raw) return null;
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return '/api';
+      return null;
     }
     const isLocalTarget =
       parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
     if (isLocalTarget && typeof window !== 'undefined' && parsed.host !== window.location.host) {
-      return '/api';
+      return null;
     }
-    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}/api`;
+    const cleanPath = parsed.pathname.replace(/\/+$/, '').replace(/\/api$/i, '');
+    return {
+      origin: parsed.origin,
+      basePath: cleanPath,
+    };
   } catch {
-    return '/api';
+    return null;
   }
 }
 
-const baseURL = resolveBaseUrl();
+export function resolveApiBaseUrl(rawUrl = import.meta.env?.VITE_API_URL): string {
+  const resolved = cleanOriginAndPath(rawUrl);
+  if (!resolved) return '/api';
+  return `${resolved.origin}${resolved.basePath}/api`;
+}
+
+export function getBackendOrigin(rawUrl = import.meta.env?.VITE_API_URL): string | undefined {
+  const resolved = cleanOriginAndPath(rawUrl);
+  if (!resolved) return undefined;
+  return `${resolved.origin}${resolved.basePath}`;
+}
+
+export function resolveApiAssetUrl(url?: string | null): string {
+  const trimmed = (url || '').trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('/api/')) {
+    const backendOrigin = getBackendOrigin();
+    return backendOrigin ? `${backendOrigin}${trimmed}` : trimmed;
+  }
+  return trimmed;
+}
+
+const baseURL = resolveApiBaseUrl();
 
 export const api = axios.create({
   baseURL,
@@ -95,7 +122,13 @@ api.interceptors.response.use(
 
 export function getApiErrorMessage(err: unknown, fallback = 'Something went wrong'): string {
   if (axios.isAxiosError(err)) {
-    return err.response?.data?.message || err.message || fallback;
+    if (err.response?.data?.message) {
+      return err.response.data.message;
+    }
+    if (err.response?.status === 404) {
+      return 'API endpoint not found (404). Make sure the Node/Express backend server is running and VITE_API_URL or reverse-proxy rewrites are configured.';
+    }
+    return err.message || fallback;
   }
   if (err instanceof Error) return err.message;
   return fallback;

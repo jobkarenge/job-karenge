@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SkeletonList } from '../../components/common/UIPrimitives';
 import { useAuth } from '../../context/AuthContext';
-import { api, getAccessToken, getApiErrorMessage } from '../../services/api';
+import { api, getAccessToken, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
 import type { CandidateProfile } from '../../types';
 import { formatShortDate } from '../../utils/formatters';
 
@@ -130,9 +130,10 @@ export function CandidateProfilePage() {
 
   const handleViewResume = async () => {
     if (!profile?.resumeUrl) return;
+    const resolvedUrl = resolveApiAssetUrl(profile.resumeUrl);
     if (profile.resumeUrl.startsWith('http')) {
       const a = document.createElement('a');
-      a.href = profile.resumeUrl;
+      a.href = resolvedUrl;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
       a.download = profile.resumeFileName || 'resume.pdf';
@@ -140,7 +141,7 @@ export function CandidateProfilePage() {
       return;
     }
     try {
-      const res = await fetch(profile.resumeUrl, {
+      const res = await fetch(resolvedUrl, {
         headers: { Authorization: `Bearer ${getAccessToken() || ''}` },
       });
       if (!res.ok) throw new Error('Unable to download resume');
@@ -230,7 +231,7 @@ export function CandidateProfilePage() {
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-full border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0">
               {user?.profileImage ? (
-                <img src={user.profileImage} alt={user.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                <img src={resolveApiAssetUrl(user.profileImage)} alt={user.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
               ) : (
                 <UserCircle className="w-9 h-9 text-slate-400" />
               )}

@@ -137,3 +137,22 @@ npm run lint
 npm run build
 npm run dev
 ```
+
+---
+
+## Production Deployment (Single Full-Stack Host vs Netlify + Backend)
+
+Job Karenge is a **full-stack application** (`server.ts` serves Express `/api/*`, Socket.IO `/socket.io/*`, and the compiled Vite SPA in `dist/`). Deploying only the static `dist/` folder to Netlify without a running Node backend causes `404` / `400` errors on `/api/*` requests.
+
+### Option A: Single Full-Stack Host (Recommended — Render, Railway, Cloud Run, VPS)
+1. **Build Command**: `npm run build`
+2. **Start Command**: `npm start` *(runs `NODE_ENV=production node server.ts`)*
+3. Set server environment variables (`MONGODB_URI`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `CLIENT_URL`, `SERVER_URL`). Leave `VITE_API_URL` empty for same-origin `/api`.
+
+### Option B: Split Hosting (Netlify Frontend + Separate Node Backend)
+1. **Deploy the Backend** (`npm start` via `server.ts`) to a Node.js host (Render, Railway, Cloud Run, Fly.io, or VPS) with `CLIENT_URL=https://job-karenge.netlify.app` (your Netlify domain).
+2. **Connect Netlify Frontend to the Backend** using either method:
+   - **Method 1 (`VITE_API_URL`)**: In Netlify **Site configuration -> Environment variables**, set `VITE_API_URL=https://<your-backend-domain>` and trigger a fresh Netlify deploy (Vite embeds `VITE_API_URL` at build time for REST API, uploads, and Socket.IO).
+   - **Method 2 (Netlify Proxy Rewrites)**: Uncomment the `/api/*` and `/socket.io/*` proxy rules inside `netlify.toml` with your `<YOUR_BACKEND_ORIGIN>` so API requests stay same-origin through Netlify.
+3. Client-side React routes are handled automatically by `netlify.toml` and `public/_redirects` (`/* /index.html 200`).
+

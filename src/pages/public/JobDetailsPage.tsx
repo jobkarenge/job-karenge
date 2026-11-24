@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { SkeletonList } from '../../components/common/UIPrimitives';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
 import type { Job } from '../../types';
 import { formatSalaryRange, formatShortDate, isDeadlineExpired } from '../../utils/formatters';
 
@@ -136,7 +136,7 @@ export function JobDetailsPage() {
               className="w-14 h-14 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 flex items-center justify-center shrink-0 overflow-hidden hover:border-blue-500/60 transition-colors"
             >
               {job.company?.logoUrl ? (
-                <img src={job.company.logoUrl} alt={job.companyName} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                <img src={resolveApiAssetUrl(job.company.logoUrl)} alt={job.companyName} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
               ) : (
                 <Building2 className="w-6 h-6 text-[#102A43] dark:text-slate-200" />
               )}
