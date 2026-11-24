@@ -1,0 +1,6 @@
+{
+  "name": "Job Karenge",
+  "description": "Full-stack recruitment and career management platform connecting candidates, verified recruiters, and hiring teams with real-time application tracking, interview scheduling, and automated alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

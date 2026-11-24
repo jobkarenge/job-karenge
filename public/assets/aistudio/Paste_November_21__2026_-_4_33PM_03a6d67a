@@ -1,0 +1,1382 @@
+# PROJECT: JOB KARENGE
+## Complete MERN Stack Job Portal & Recruitment Management Platform
+
+Act as a senior full-stack software architect, MERN stack developer, UI/UX designer, database architect, security engineer, and product designer.
+
+Build a complete, modern, responsive, production-ready job portal named **"Job Karenge"**.
+
+This must be a fully functional full-stack application, not just a static UI or frontend prototype.
+
+The platform will connect job seekers with recruiters. Recruiters/admins can publish and manage jobs, review applications, shortlist candidates, schedule interviews, and select candidates. Candidates can discover jobs, apply, manage profiles, upload resumes, and track their applications in real time through their dashboards.
+
+Prioritize clean architecture, reusable components, responsive design, security, performance, scalability, and excellent user experience.
+
+---
+
+# 1. TECHNOLOGY STACK
+
+Use the following technologies strictly:
+
+## Frontend
+- React.js
+- Vite
+- JavaScript (ES6+)
+- React Router DOM
+- Tailwind CSS
+- Framer Motion for animations
+- Axios for API communication
+- React Hook Form for form management
+- Zod for validation
+- React Icons / Lucide React
+- Recharts for dashboard analytics
+- React Hot Toast or Sonner for notifications
+
+## Backend
+- Node.js
+- Express.js
+- REST API architecture
+- JWT authentication
+- bcrypt/bcryptjs for password hashing
+- Role-based access control
+- Express Validator or Zod for backend validation
+
+## Database
+- MongoDB Atlas
+- Mongoose ODM
+- Proper schema relationships and indexing
+- Pagination and optimized database queries
+
+## File Storage
+- Cloudinary for image and PDF storage.
+- Cloudinary transformations for image compression and optimization.
+- Compress PDFs before uploading.
+- Every uploaded PDF must be less than 1 MB.
+- Validate file type, file size, and actual PDF format on the server.
+- Never upload an oversized PDF without successfully compressing and verifying it.
+- If compression cannot bring a PDF below 1 MB, return a clear error and ask the user to upload a smaller document.
+- Store Cloudinary public IDs, secure URLs, file sizes, and metadata in MongoDB.
+- Use secure upload and deletion APIs.
+
+## Email Service
+- SendGrid API for transactional and promotional emails.
+- Dynamic HTML email templates.
+- Email delivery status tracking where supported.
+- Unsubscribe management for promotional emails.
+
+---
+
+# 2. BRAND IDENTITY AND DESIGN SYSTEM
+
+Application Name: Job Karenge
+
+Brand Personality:
+- Professional
+- Modern
+- Trustworthy
+- Innovative
+- Career-focused
+- User-friendly
+
+Create a premium visual identity.
+
+Suggested visual theme:
+- Primary: Deep Navy Blue (#102A43)
+- Secondary: Royal Blue (#2563EB)
+- Accent: Vibrant Purple (#7C3AED)
+- Success: Green (#16A34A)
+- Background: #F8FAFC
+- White cards with subtle shadows
+- Dark text and muted secondary text
+
+Typography:
+- Use Inter, Manrope, or Plus Jakarta Sans.
+
+Design requirements:
+- Premium landing page.
+- Modern navigation bar.
+- Attractive hero section with a powerful job-search interface.
+- Beautiful job cards.
+- Professional dashboard layouts.
+- Consistent spacing, typography, border radiuses, and colors.
+- Light and dark mode.
+- Mobile-first responsive design.
+- Smooth page transitions.
+- Skeleton loaders.
+- Empty states.
+- Error states.
+- Success states.
+- Confirmation dialogs.
+- Accessible forms and navigation.
+
+Use Framer Motion for:
+- Page transitions.
+- Scroll reveal animations.
+- Hover interactions.
+- Animated statistics.
+- Card entrance animations.
+- Dashboard transitions.
+- Modal animations.
+- Micro-interactions.
+
+Keep animations smooth and professional. Avoid excessive animations that affect performance or accessibility.
+
+---
+
+# 3. USER ROLES AND AUTHENTICATION
+
+Implement secure authentication with two main roles:
+
+1. Candidate
+2. Recruiter
+
+Also implement a protected Super Admin role for platform management.
+
+Authentication features:
+- User registration.
+- Login.
+- Logout.
+- Email verification.
+- Forgot password.
+- Reset password.
+- Change password.
+- Secure JWT access and refresh token strategy.
+- Password hashing with bcrypt.
+- Role-based authorization.
+- Protected routes.
+- Session management.
+- Account activation/deactivation.
+
+Registration forms:
+
+Candidate:
+- Full name
+- Email
+- Phone number
+- Password
+- Confirm password
+- Location
+- Terms and privacy consent
+
+Recruiter:
+- Full name
+- Work email
+- Phone number
+- Company name
+- Designation
+- Password
+- Confirm password
+
+Recruiter accounts should support admin approval or verification before they can publish jobs.
+
+IMPORTANT:
+Never trust role information submitted by the frontend. Verify permissions on the backend for every protected operation.
+
+Use secure, HTTP-only cookies for authentication tokens where appropriate, with CSRF protection when required.
+
+---
+
+# 4. PUBLIC WEBSITE
+
+Create the following public pages:
+
+## Home Page
+
+Build an attractive homepage containing:
+
+1. Modern navbar.
+2. Hero section:
+   - Heading: "Find Your Dream Job. Build Your Future."
+   - Supporting description.
+   - Job search bar.
+   - Search by job title, company, or skill.
+   - Location selector.
+   - Job category selector.
+   - Search button.
+3. Popular job categories.
+4. Featured jobs.
+5. Latest job opportunities.
+6. Top companies.
+7. How Job Karenge Works.
+8. Why Choose Job Karenge?
+9. Career statistics.
+10. Testimonials.
+11. Recruiter CTA section.
+12. Candidate CTA section.
+13. Newsletter subscription.
+14. Professional footer.
+
+All homepage statistics and job listings must be fetched dynamically from backend APIs.
+
+## Public Pages
+
+- Home
+- Browse Jobs
+- Job Details
+- Companies
+- About Us
+- Contact Us
+- FAQs
+- Privacy Policy
+- Terms and Conditions
+- Login
+- Register
+- Forgot Password
+
+## Job Search and Discovery
+
+Implement advanced job search functionality.
+
+Filters:
+- Job title
+- Company
+- Category
+- Location
+- Remote / Hybrid / On-site
+- Experience level
+- Salary range
+- Employment type
+- Skills
+- Date posted
+- Application deadline
+- Education qualification
+
+Sorting:
+- Latest jobs
+- Oldest jobs
+- Salary: High to Low
+- Salary: Low to High
+- Most relevant
+
+Implement:
+- Pagination.
+- Search suggestions.
+- Filter chips.
+- Clear all filters.
+- Responsive filter sidebar.
+- Save/bookmark jobs.
+- Share job links.
+
+---
+
+# 5. CANDIDATE DASHBOARD
+
+Create a comprehensive candidate dashboard.
+
+Dashboard navigation:
+
+- Overview
+- My Profile
+- Browse Jobs
+- Saved Jobs
+- My Applications
+- Interview Schedule
+- Notifications
+- Email Preferences
+- Account Settings
+
+## Candidate Overview
+
+Display:
+- Total applications.
+- Applications under review.
+- Shortlisted applications.
+- Scheduled interviews.
+- Selected applications.
+- Rejected applications.
+- Recently applied jobs.
+- Recommended jobs.
+- Upcoming interviews.
+
+Use attractive statistics cards and charts.
+
+## Candidate Profile Management
+
+Candidates must be able to create, edit, and manage their professional profiles.
+
+Profile sections:
+
+1. Personal Information
+   - Full name
+   - Profile photo
+   - Email
+   - Phone
+   - Date of birth (optional)
+   - Gender (optional)
+   - Current location
+   - Address
+
+2. Professional Summary
+   - Career objective
+   - Professional introduction
+   - Current designation
+   - Total experience
+   - Expected salary
+
+3. Education
+   - Institution
+   - Degree
+   - Field of study
+   - Start date
+   - End date
+   - Grade/percentage
+
+4. Work Experience
+   - Company
+   - Job title
+   - Employment type
+   - Start and end dates
+   - Responsibilities
+   - Current employment status
+
+5. Skills
+   - Technical skills
+   - Soft skills
+   - Skill proficiency
+
+6. Projects
+   - Project title
+   - Description
+   - Technologies
+   - Project URL
+
+7. Certifications
+8. Languages
+9. Social Links
+   - LinkedIn
+   - GitHub
+   - Portfolio
+   - Personal website
+
+10. Resume Management
+   - Upload PDF resume.
+   - Preview and download.
+   - Replace existing resume.
+   - Delete resume.
+   - Track resume upload date.
+
+Show profile completion percentage.
+
+Allow candidates to preview their public professional profile.
+
+## Saved Jobs
+
+- Bookmark jobs.
+- Remove saved jobs.
+- Display job expiration/deadline.
+- Apply directly from saved jobs.
+
+## Application Tracking
+
+This is a core feature.
+
+Candidates must be able to track every application.
+
+Implement the following application statuses:
+
+1. Applied
+2. Shortlisted
+3. Interview Scheduled
+4. Selected
+5. Rejected
+6. Withdrawn
+
+Display each application with:
+- Job title.
+- Company name.
+- Application date.
+- Recruiter details where appropriate.
+- Current status.
+- Last status update.
+- Interview details if scheduled.
+- Application timeline.
+
+Create a visual application progress timeline.
+
+Example:
+
+Applied → Shortlisted → Interview Scheduled → Selected
+
+Show rejected and withdrawn applications as separate terminal states.
+
+Send an email notification whenever the application status changes.
+
+Candidates should be able to withdraw an application where permitted.
+
+Prevent duplicate applications to the same job.
+
+---
+
+# 6. RECRUITER DASHBOARD
+
+Create a separate professional recruiter dashboard.
+
+Navigation:
+
+- Overview
+- Company Profile
+- Create Job
+- Manage Jobs
+- Applications
+- Shortlisted Candidates
+- Interview Management
+- Notifications
+- Email Campaigns
+- Settings
+
+## Recruiter Overview
+
+Display:
+- Total published jobs.
+- Active jobs.
+- Draft jobs.
+- Expired jobs.
+- Total applications.
+- New applications.
+- Shortlisted candidates.
+- Interviews scheduled.
+- Selected candidates.
+
+Add charts for:
+- Applications over time.
+- Applications by job.
+- Candidate status distribution.
+- Recruitment performance.
+
+## Company Profile
+
+Recruiters can manage:
+- Company name.
+- Company logo.
+- Cover/banner image.
+- Industry.
+- Company description.
+- Website.
+- Company size.
+- Headquarters.
+- Social links.
+- Contact information.
+
+Company logos and banners must be stored in Cloudinary.
+
+---
+
+# 7. JOB CREATION AND MANAGEMENT
+
+This is one of the most important modules.
+
+Create a professional job creation page with a multi-section form.
+
+Required fields:
+
+1. Job Title
+2. Company Name (linked to the recruiter's verified company profile)
+3. Job Category
+4. Job Description
+5. Application Deadline
+6. Required Experience
+7. Employment Type
+8. Work Mode (Remote / Hybrid / On-site)
+9. Job Location
+10. Salary Range
+11. Required Skills
+12. Educational Qualification
+13. Number of Openings
+14. Responsibilities
+15. Required Qualifications
+16. Preferred Qualifications
+17. Benefits and Perks
+18. Contact Person
+19. Contact Email
+20. Contact Phone
+21. Application Instructions
+
+Additional options:
+- Publish immediately.
+- Save as draft.
+- Schedule publication.
+- Featured job.
+- Allow applications through Job Karenge.
+- Close applications manually.
+
+Job management actions:
+- Create.
+- Edit.
+- Duplicate.
+- Publish.
+- Unpublish.
+- Close.
+- Delete (with confirmation).
+- Preview.
+- View applicants.
+- Export applicants to CSV.
+
+Implement automatic expiration:
+When the application deadline passes, automatically mark the job as expired/closed and prevent new applications.
+
+Validate all fields on frontend and backend.
+
+Use proper date and timezone handling.
+
+---
+
+# 8. APPLICATION MANAGEMENT FOR RECRUITERS
+
+Recruiters must be able to manage all applicants for their jobs.
+
+Application list should contain:
+
+- Candidate name.
+- Profile photo.
+- Email.
+- Phone.
+- Resume.
+- Skills.
+- Experience.
+- Education.
+- Application date.
+- Application status.
+
+Recruiter actions:
+
+- View candidate profile.
+- Preview resume.
+- Download resume.
+- Shortlist candidate.
+- Reject candidate.
+- Schedule interview.
+- Mark candidate as selected.
+- Add private notes.
+- Add internal feedback.
+- Filter applications by status.
+- Search applicants.
+- Sort by application date.
+- Bulk shortlist.
+- Bulk reject.
+- Export application records.
+
+Maintain a complete status history with:
+- Previous status.
+- New status.
+- Updated by.
+- Timestamp.
+- Optional recruiter message.
+
+Important:
+A candidate should only be able to view their own applications.
+
+A recruiter should only be able to manage applications associated with jobs they own.
+
+---
+
+# 9. INTERVIEW MANAGEMENT
+
+Create a dedicated interview management module.
+
+Recruiters can schedule interviews with:
+
+- Candidate.
+- Job.
+- Interview date.
+- Interview time.
+- Timezone.
+- Interview type.
+- Meeting link or location.
+- Interviewer name.
+- Interview instructions.
+- Additional notes.
+
+Interview types:
+- Online
+- In-person
+- Phone
+
+Features:
+- Schedule interview.
+- Reschedule interview.
+- Cancel interview.
+- Update interview details.
+- Interview reminders.
+- Candidate confirmation where appropriate.
+
+Send automatic email notifications when:
+- An interview is scheduled.
+- An interview is rescheduled.
+- An interview is cancelled.
+- An upcoming interview reminder is due.
+
+Show all interviews in the candidate and recruiter dashboards.
+
+---
+
+# 10. AUTOMATED EMAIL SYSTEM – SENDGRID
+
+Build a complete email notification and promotional system using SendGrid API.
+
+Create reusable responsive HTML email templates with Job Karenge branding.
+
+## Transactional Emails
+
+Automatically send emails for:
+
+1. Welcome after registration.
+2. Email verification.
+3. Password reset.
+4. New application confirmation.
+5. Application shortlisted.
+6. Interview scheduled.
+7. Interview rescheduled.
+8. Interview cancelled.
+9. Candidate selected.
+10. Candidate rejected.
+11. Job deadline reminder.
+12. Job application closing notification.
+13. Important account notifications.
+
+## Automated Promotional Email Updates
+
+Create an automated promotional email system for candidates.
+
+Candidates should receive relevant job opportunities based on:
+
+- Selected job categories.
+- Skills.
+- Preferred location.
+- Experience level.
+- Employment type.
+- Remote work preference.
+
+Promotional email features:
+
+- Daily job digest.
+- Weekly job digest.
+- Personalized job recommendations.
+- New job alerts.
+- Featured job announcements.
+- Career-related announcements.
+
+Email preferences page:
+
+Candidates can manage:
+- Daily job alerts.
+- Weekly job alerts.
+- Promotional emails.
+- Application notifications.
+- Interview notifications.
+- Job category preferences.
+- Preferred locations.
+- Email frequency.
+
+IMPORTANT:
+- Promotional emails must have an unsubscribe link.
+- Respect user consent and unsubscribe preferences.
+- Do not unsubscribe users from essential transactional notifications.
+- Prevent duplicate promotional emails.
+- Use background jobs and scheduled processing for campaigns.
+- Track delivery, bounce, and engagement events where supported by SendGrid.
+- Implement retry logic and failure logging.
+- Use SendGrid API keys only on the backend.
+
+Create an admin email campaign dashboard to manage:
+- Campaign title.
+- Email subject.
+- Email template.
+- Target audience.
+- Schedule date.
+- Campaign status.
+- Delivery statistics.
+- Failed deliveries.
+
+---
+
+# 11. SUPER ADMIN DASHBOARD
+
+Create a secure platform-wide admin dashboard.
+
+Admin navigation:
+
+- Dashboard
+- Manage Candidates
+- Manage Recruiters
+- Recruiter Verification
+- Manage Companies
+- Manage Jobs
+- Applications
+- Email Campaigns
+- Categories
+- Reports and Analytics
+- Contact Messages
+- Platform Settings
+- Audit Logs
+
+Admin capabilities:
+
+- View platform statistics.
+- Manage all users.
+- Approve/reject recruiter accounts.
+- Suspend or reactivate accounts.
+- Verify companies.
+- Create, edit, publish, or remove jobs.
+- Manage job categories.
+- View all applications.
+- Monitor email campaigns.
+- Manage featured jobs.
+- Review reports.
+- Configure platform settings.
+- View administrative audit logs.
+
+Never expose admin functionality to candidates or recruiters.
+
+---
+
+# 12. DATABASE DESIGN – MONGODB ATLAS
+
+Create proper Mongoose models with validation, timestamps, references, and indexes.
+
+Required collections:
+
+1. User
+2. CandidateProfile
+3. RecruiterProfile
+4. Company
+5. Job
+6. Application
+7. SavedJob
+8. Interview
+9. Notification
+10. EmailPreference
+11. EmailCampaign
+12. EmailLog
+13. JobCategory
+14. ContactMessage
+15. AuditLog
+16. RefreshToken / Session (if applicable)
+
+Important schema requirements:
+
+## User
+- name
+- email (unique)
+- phone
+- passwordHash
+- role
+- emailVerified
+- accountStatus
+- profileImage
+- createdAt
+- updatedAt
+
+## Job
+- recruiterId
+- companyId
+- title
+- slug
+- description
+- category
+- experience
+- employmentType
+- workMode
+- location
+- salaryMin
+- salaryMax
+- skills
+- qualifications
+- responsibilities
+- benefits
+- applicationDeadline
+- openings
+- contactDetails
+- status
+- publishedAt
+- createdAt
+- updatedAt
+
+## Application
+- candidateId
+- jobId
+- recruiterId
+- resumeUrl
+- resumePublicId
+- coverLetter
+- status
+- statusHistory
+- recruiterNotes
+- appliedAt
+- updatedAt
+
+Create indexes for:
+- User email.
+- Job title.
+- Job category.
+- Job location.
+- Job status.
+- Application candidateId.
+- Application recruiterId.
+- Application jobId.
+- Application status.
+- Application deadline.
+
+Use compound indexes where appropriate.
+
+Prevent duplicate candidate applications using a unique compound index on candidateId and jobId.
+
+Use pagination and optimized MongoDB aggregation for analytics.
+
+---
+
+# 13. CLOUDINARY FILE MANAGEMENT AND COMPRESSION
+
+Build a centralized file upload service.
+
+Supported files:
+- Profile photos.
+- Company logos.
+- Company banners.
+- Candidate resumes.
+- Optional job-related documents.
+
+PDF requirements:
+- All PDFs must be less than 1 MB before being stored in Cloudinary.
+- Validate MIME type and PDF signature.
+- Apply PDF compression before upload.
+- Verify compressed output size.
+- Reject files that remain 1 MB or larger.
+- Avoid unnecessary repeated compression.
+- Store secure Cloudinary URLs and public IDs.
+- Delete replaced files when safe to do so.
+- Prevent public exposure of sensitive candidate documents.
+
+Image requirements:
+- Compress images.
+- Resize profile images.
+- Generate optimized formats such as WebP/AVIF when supported.
+- Use responsive image delivery.
+- Avoid oversized uploads.
+
+Use secure backend upload endpoints and environment-based Cloudinary credentials.
+
+Do not store file binaries in MongoDB.
+
+---
+
+# 14. NOTIFICATION SYSTEM
+
+Create an in-app notification center.
+
+Notification types:
+- New application.
+- Application status update.
+- Interview scheduled.
+- Interview reminder.
+- New job matching candidate preferences.
+- Recruiter verification.
+- Account updates.
+- Important platform announcements.
+
+Features:
+- Unread count.
+- Mark as read.
+- Mark all as read.
+- Delete notification.
+- Notification history.
+- Relevant navigation links.
+
+Use Socket.IO for real-time notifications where appropriate.
+
+---
+
+# 15. ADDITIONAL ADVANCED FEATURES
+
+Add useful features that improve the platform.
+
+## Candidate Features
+- Job bookmarking.
+- Recently viewed jobs.
+- Personalized job recommendations.
+- Application withdrawal.
+- Resume management.
+- Profile completion score.
+- Job sharing.
+- Application statistics.
+
+## Recruiter Features
+- Applicant pipeline management.
+- Candidate notes.
+- Bulk applicant operations.
+- CSV exports.
+- Job performance analytics.
+- Reusable job templates.
+- Job duplication.
+- Featured job support.
+
+## Platform Features
+- SEO-friendly job pages.
+- Dynamic meta tags.
+- Sitemap.
+- Robots.txt.
+- Search engine indexing for public jobs.
+- Responsive design.
+- Accessibility.
+- Error boundaries.
+- Rate limiting.
+- API documentation.
+- Audit logs.
+
+Do not add fake AI-powered functionality or simulated results. Any AI feature should be clearly identified and implemented using a real configured service.
+
+---
+
+# 16. BACKEND ARCHITECTURE
+
+Organize the backend professionally.
+
+Suggested structure:
+
+server/
+  src/
+    config/
+      db.js
+      cloudinary.js
+      sendgrid.js
+
+    models/
+      User.js
+      CandidateProfile.js
+      RecruiterProfile.js
+      Company.js
+      Job.js
+      Application.js
+      Interview.js
+      Notification.js
+      EmailPreference.js
+      EmailCampaign.js
+      EmailLog.js
+      JobCategory.js
+      AuditLog.js
+
+    controllers/
+      authController.js
+      userController.js
+      candidateController.js
+      recruiterController.js
+      jobController.js
+      applicationController.js
+      interviewController.js
+      adminController.js
+      notificationController.js
+      emailController.js
+
+    routes/
+      authRoutes.js
+      candidateRoutes.js
+      recruiterRoutes.js
+      jobRoutes.js
+      applicationRoutes.js
+      interviewRoutes.js
+      adminRoutes.js
+      notificationRoutes.js
+      emailRoutes.js
+
+    middleware/
+      authMiddleware.js
+      roleMiddleware.js
+      errorMiddleware.js
+      uploadMiddleware.js
+      validationMiddleware.js
+      rateLimitMiddleware.js
+
+    services/
+      cloudinaryService.js
+      pdfCompressionService.js
+      emailService.js
+      notificationService.js
+      applicationService.js
+
+    jobs/
+      jobExpirationJob.js
+      promotionalEmailJob.js
+      interviewReminderJob.js
+
+    utils/
+      generateToken.js
+      apiResponse.js
+      validators.js
+
+    app.js
+    server.js
+
+  .env.example
+  package.json
+
+Use:
+- MVC architecture.
+- Centralized error handling.
+- Consistent API response format.
+- Input validation.
+- Authentication middleware.
+- Role authorization.
+- Service layer for business logic.
+- Structured logging.
+
+---
+
+# 17. FRONTEND ARCHITECTURE
+
+Suggested structure:
+
+client/
+  src/
+    assets/
+
+    components/
+      common/
+      layout/
+      navbar/
+      footer/
+      forms/
+      jobs/
+      dashboard/
+      charts/
+      notifications/
+      modals/
+
+    pages/
+      public/
+      auth/
+      candidate/
+      recruiter/
+      admin/
+
+    layouts/
+      PublicLayout.jsx
+      CandidateLayout.jsx
+      RecruiterLayout.jsx
+      AdminLayout.jsx
+
+    context/
+      AuthContext.jsx
+      ThemeContext.jsx
+      NotificationContext.jsx
+
+    hooks/
+    services/
+      api.js
+      authService.js
+      jobService.js
+      applicationService.js
+      profileService.js
+
+    routes/
+      AppRoutes.jsx
+      ProtectedRoute.jsx
+      RoleBasedRoute.jsx
+
+    utils/
+    constants/
+
+    App.jsx
+    main.jsx
+
+  index.html
+  package.json
+  vite.config.js
+
+Create reusable components instead of repeating code.
+
+Use Axios interceptors for authentication and API errors.
+
+Use route-based code splitting and lazy loading for larger pages.
+
+---
+
+# 18. API STRUCTURE
+
+Build REST APIs with consistent naming.
+
+Authentication:
+- POST /api/auth/register
+- POST /api/auth/login
+- POST /api/auth/logout
+- POST /api/auth/refresh
+- POST /api/auth/verify-email
+- POST /api/auth/forgot-password
+- POST /api/auth/reset-password
+- GET /api/auth/me
+
+Jobs:
+- GET /api/jobs
+- GET /api/jobs/:id
+- POST /api/jobs
+- PUT /api/jobs/:id
+- DELETE /api/jobs/:id
+- PATCH /api/jobs/:id/status
+- GET /api/jobs/featured
+- GET /api/jobs/categories
+
+Applications:
+- POST /api/applications
+- GET /api/applications/my-applications
+- GET /api/applications/:id
+- PATCH /api/applications/:id/withdraw
+- GET /api/recruiter/applications
+- PATCH /api/recruiter/applications/:id/status
+
+Profiles:
+- GET /api/candidate/profile
+- PUT /api/candidate/profile
+- GET /api/recruiter/profile
+- PUT /api/recruiter/profile
+
+Interviews:
+- POST /api/interviews
+- GET /api/interviews
+- PUT /api/interviews/:id
+- DELETE /api/interviews/:id
+
+Notifications:
+- GET /api/notifications
+- PATCH /api/notifications/:id/read
+- PATCH /api/notifications/read-all
+
+Email:
+- GET /api/email/preferences
+- PUT /api/email/preferences
+- POST /api/email/unsubscribe
+- GET /api/admin/email-campaigns
+- POST /api/admin/email-campaigns
+
+Admin:
+- GET /api/admin/dashboard
+- GET /api/admin/users
+- PATCH /api/admin/users/:id/status
+- PATCH /api/admin/recruiters/:id/verification
+- GET /api/admin/analytics
+
+Add additional endpoints as required.
+
+All API endpoints must have appropriate validation and authorization.
+
+---
+
+# 19. SECURITY AND PERFORMANCE
+
+Implement professional security practices:
+
+- Helmet.
+- CORS with allowed origins.
+- Rate limiting.
+- Secure authentication.
+- Password hashing.
+- Input sanitization.
+- NoSQL injection protection.
+- XSS prevention.
+- CSRF protection where applicable.
+- File upload validation.
+- Secure environment variables.
+- Access control on every resource.
+- Prevent IDOR vulnerabilities.
+- Secure resume access.
+- Prevent mass assignment.
+- Email sending rate limits.
+- API error handling.
+- Audit logging for sensitive operations.
+
+Performance:
+- Lazy loading.
+- Image optimization.
+- Database indexes.
+- Pagination.
+- API caching where appropriate.
+- Debounced job searches.
+- Efficient React rendering.
+- Optimized bundle size.
+
+Never expose secrets or API keys in frontend code.
+
+---
+
+# 20. ENVIRONMENT CONFIGURATION
+
+Create separate .env.example files for frontend and backend.
+
+Backend environment variables:
+
+PORT=
+NODE_ENV=
+MONGODB_URI=
+JWT_ACCESS_SECRET=
+JWT_REFRESH_SECRET=
+CLIENT_URL=
+SERVER_URL=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+SENDGRID_API_KEY=
+SENDGRID_FROM_EMAIL=
+SENDGRID_FROM_NAME=
+EMAIL_VERIFICATION_SECRET=
+PASSWORD_RESET_SECRET=
+
+Frontend environment variables:
+
+VITE_API_URL=
+
+Never hardcode actual credentials.
+
+Provide instructions to configure:
+- MongoDB Atlas.
+- Cloudinary.
+- SendGrid.
+- Frontend and backend environment variables.
+
+---
+
+# 21. DEPLOYMENT
+
+Prepare the project for deployment.
+
+Frontend:
+- Netlify or Vercel.
+
+Backend:
+- Render or another Node.js hosting provider.
+
+Database:
+- MongoDB Atlas.
+
+File storage:
+- Cloudinary.
+
+Email:
+- SendGrid.
+
+Include:
+- Production build configuration.
+- CORS configuration.
+- Environment setup.
+- API base URL configuration.
+- Deployment instructions.
+- Health-check endpoint.
+- Production error handling.
+- Database connection handling.
+- Logging.
+
+---
+
+# 22. TESTING AND QUALITY ASSURANCE
+
+Test the entire application.
+
+Authentication:
+- Candidate registration/login.
+- Recruiter registration/login.
+- Role restrictions.
+- Password reset.
+
+Jobs:
+- Create job.
+- Edit job.
+- Publish job.
+- Expire job.
+- Search and filter jobs.
+
+Applications:
+- Apply for job.
+- Prevent duplicate application.
+- Update application status.
+- Track application timeline.
+- Withdraw application.
+
+Files:
+- Upload profile image.
+- Upload resume.
+- Verify PDF compression below 1 MB.
+- Reject invalid files.
+
+Emails:
+- Welcome email.
+- Application email.
+- Status update email.
+- Interview email.
+- Promotional email.
+- Unsubscribe behavior.
+
+Dashboard:
+- Candidate dashboard.
+- Recruiter dashboard.
+- Admin dashboard.
+
+Verify:
+- Mobile responsiveness.
+- Desktop responsiveness.
+- Loading states.
+- Error states.
+- Empty states.
+- Authorization.
+- Database consistency.
+
+Do not use dummy data as a replacement for real backend functionality.
+
+---
+
+# 23. DEVELOPMENT EXECUTION INSTRUCTIONS
+
+Follow these instructions carefully:
+
+1. First, analyze the complete project requirements.
+2. Establish a clean full-stack architecture.
+3. Create the Vite React frontend.
+4. Create the Express backend.
+5. Configure MongoDB Atlas connection.
+6. Implement database models.
+7. Implement authentication and role-based authorization.
+8. Implement public job browsing and search.
+9. Implement candidate dashboard.
+10. Implement recruiter dashboard.
+11. Implement job creation and management.
+12. Implement application tracking.
+13. Implement interview scheduling.
+14. Implement Cloudinary file uploads and PDF compression.
+15. Implement SendGrid transactional emails.
+16. Implement automated promotional email campaigns.
+17. Implement admin dashboard.
+18. Implement notifications.
+19. Implement responsive UI and animations.
+20. Test all features and fix errors.
+
+IMPORTANT DEVELOPMENT RULES:
+
+- Build actual functional features.
+- Connect all frontend pages to real backend APIs.
+- Use MongoDB for persistent data.
+- Never rely on localStorage as the main database.
+- Never create fake buttons or non-functional navigation.
+- Never expose API secrets.
+- Never bypass backend validation.
+- Never use mock API responses in production.
+- Avoid unnecessary code duplication.
+- Use reusable components and clean code.
+- Provide meaningful loading, success, and error messages.
+- Ensure every role sees only authorized data.
+- Do not silently skip difficult features.
+- If an external integration requires credentials, create the complete integration and clearly explain which credentials are required.
+- Maintain a working application after each development phase.
+
+If the entire application cannot be completed in one generation, implement it incrementally while preserving the architecture and existing working functionality.
+
+At the end of every development phase:
+- List completed features.
+- List created files.
+- List API endpoints implemented.
+- List remaining tasks.
+- Identify any integration requiring credentials.
+- Verify that the application still runs.
+
+# FINAL PRODUCT EXPECTATION
+
+Deliver a premium, professional, fully responsive, functional MERN stack job portal called **Job Karenge**.
+
+The platform should provide a smooth experience for candidates, recruiters, and administrators.
+
+The final result should look and function like a modern professional recruitment SaaS platform, with excellent UI/UX, secure authentication, real-time application tracking, automated SendGrid emails, Cloudinary file management, and scalable MongoDB architecture.
+
+Focus on quality, usability, reliability, and maintainability.
