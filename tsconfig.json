@@ -18,11 +18,12 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "./*"
+        "./client/*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist"]
+  "include": ["client/src", "client/vite.config.ts", "server/server.ts", "server/src"],
+  "exclude": ["dist", "client/dist", "server/dist", "node_modules", "client/node_modules", "server/node_modules"]
 }

@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 
+const serverEnvPath = path.resolve(import.meta.dirname, '../../.env');
+const rootEnvPath = path.resolve(import.meta.dirname, '../../../.env');
+if (fs.existsSync(serverEnvPath)) dotenv.config({ path: serverEnvPath });
+if (fs.existsSync(rootEnvPath)) dotenv.config({ path: rootEnvPath });
 dotenv.config();
 
 const fallbackAccessSecret = crypto.randomBytes(32).toString('hex');

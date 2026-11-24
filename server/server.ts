@@ -1,14 +1,15 @@
 import express from 'express';
+import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
-import { createExpressApp } from './server/src/app.ts';
-import { connectDatabase } from './server/src/config/db.ts';
-import { env } from './server/src/config/env.ts';
-import { attachSocketIO } from './server/src/services/notificationService.ts';
-import { startBackgroundSchedulers } from './server/src/services/schedulerJobs.ts';
-import { ensureSeededDatabase } from './server/src/store/dataLayer.ts';
-import { verifyAccessToken } from './server/src/utils/tokens.ts';
+import { createExpressApp } from './src/app.ts';
+import { connectDatabase } from './src/config/db.ts';
+import { env } from './src/config/env.ts';
+import { attachSocketIO } from './src/services/notificationService.ts';
+import { startBackgroundSchedulers } from './src/services/schedulerJobs.ts';
+import { ensureSeededDatabase } from './src/store/dataLayer.ts';
+import { verifyAccessToken } from './src/utils/tokens.ts';
 
 async function bootstrap() {
   await connectDatabase();
@@ -46,9 +47,14 @@ async function bootstrap() {
   attachSocketIO(io);
   startBackgroundSchedulers();
 
+  const serverDir = import.meta.dirname;
+  const clientDir = path.resolve(serverDir, '..', 'client');
+
   if (!env.isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      configFile: path.resolve(clientDir, 'vite.config.ts'),
+      root: clientDir,
       server: {
         middlewareMode: true,
         allowedHosts: true,
@@ -61,11 +67,28 @@ async function bootstrap() {
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
+    const clientDistDir = path.resolve(clientDir, 'dist');
+    const localDistDir = path.resolve(process.cwd(), 'dist');
+    const distDir = fs.existsSync(path.join(clientDistDir, 'index.html'))
+      ? clientDistDir
+      : fs.existsSync(path.join(localDistDir, 'index.html'))
+        ? localDistDir
+        : null;
+
+    if (distDir) {
+      app.use(express.static(distDir));
+      app.get('*', (_req, res) => {
+        res.sendFile(path.join(distDir, 'index.html'));
+      });
+    } else {
+      app.get('/', (_req, res) => {
+        res.json({
+          success: true,
+          service: 'Job Karenge API',
+          status: 'ok',
+        });
+      });
+    }
   }
 
   httpServer.listen(env.port, '0.0.0.0', () => {
