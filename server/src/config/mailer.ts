@@ -1,4 +1,4 @@
-import nodemailer, { type Transporter } from 'nodemailer';
+import nodemailer, { type Transporter, type TransportOptions } from 'nodemailer';
 import {
   cloudinaryMeta,
   env,
@@ -10,8 +10,8 @@ import { db } from '../store/dataLayer.ts';
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GMAIL_SMTP_HOST = 'smtp.gmail.com';
-export const GMAIL_SMTP_PORT = 465;
-export const GMAIL_SMTP_SECURE = true;
+export const GMAIL_SMTP_PORT = env.gmailSmtpPort;
+export const GMAIL_SMTP_SECURE = GMAIL_SMTP_PORT === 465;
 
 export function sanitizeHeaderText(value: string): string {
   return String(value || '')
@@ -83,45 +83,60 @@ export function getEffectiveEmailConfig(requestOrigin?: string, clientOrigin?: s
   };
 }
 
-let cachedTransporter: Transporter | null = null;
-let cachedTransportSignature = '';
+const transporterCache = new Map<string, Transporter>();
 
-export function getGmailTransporter(): Transporter | null {
+export function getGmailTransporter(portOverride?: number): Transporter | null {
   const cfg = getEffectiveEmailConfig();
   if (!cfg.gmailUser || !cfg.gmailAppPassword) {
     return null;
   }
 
-  const signature = `${cfg.host}:${cfg.port}:${cfg.gmailUser}:${cfg.gmailAppPassword.length}`;
-  if (cachedTransporter && cachedTransportSignature === signature) {
-    return cachedTransporter;
+  const targetPort = portOverride === 587 ? 587 : portOverride === 465 ? 465 : cfg.port;
+  const targetSecure = targetPort === 465;
+  const signature = `${cfg.host}:${targetPort}:${cfg.gmailUser}:${cfg.gmailAppPassword.length}`;
+  const existing = transporterCache.get(signature);
+  if (existing) {
+    return existing;
   }
 
-  if (cachedTransporter) {
-    try {
-      cachedTransporter.close();
-    } catch {
-      // Ignore transporter close errors when recreating
-    }
-  }
-
-  cachedTransporter = nodemailer.createTransport({
+  const transporter = nodemailer.createTransport({
     host: cfg.host,
-    port: cfg.port,
-    secure: cfg.secure,
+    port: targetPort,
+    secure: targetSecure,
+    ...(targetSecure ? {} : { requireTLS: true }),
+    family: 4,
     pool: true,
     maxConnections: 5,
     maxMessages: 100,
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 20_000,
+    connectionTimeout: 5_000,
+    greetingTimeout: 5_000,
+    socketTimeout: 10_000,
+    tls: {
+      minVersion: 'TLSv1.2',
+      servername: cfg.host,
+    },
     auth: {
       user: cfg.gmailUser,
       pass: cfg.gmailAppPassword,
     },
-  });
-  cachedTransportSignature = signature;
-  return cachedTransporter;
+  } as TransportOptions);
+
+  transporterCache.set(signature, transporter);
+  return transporter;
+}
+
+function isNetworkPortFailure(err: unknown): boolean {
+  const e = (err && typeof err === 'object' ? err : {}) as { code?: string; message?: string };
+  const code = String(e.code || '').toUpperCase();
+  return (
+    code === 'ETIMEDOUT' ||
+    code === 'ESOCKET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNECTION' ||
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'EAI_AGAIN'
+  );
 }
 
 export async function verifyGmailSmtpConnection(): Promise<{
@@ -145,43 +160,55 @@ export async function verifyGmailSmtpConnection(): Promise<{
     };
   }
 
-  const transporter = getGmailTransporter();
-  if (!transporter) {
-    return {
-      ok: false,
-      host: cfg.host,
-      port: cfg.port,
-      secure: cfg.secure,
-      fromEmail: cfg.fromEmail,
-      error: 'Unable to initialize Gmail SMTP transporter.',
-    };
+  const primaryPort = cfg.port;
+  const fallbackPort = primaryPort === 465 ? 587 : 465;
+  const portsToTry = [primaryPort, fallbackPort];
+  let lastError = 'SMTP verification failed';
+
+  for (let i = 0; i < portsToTry.length; i++) {
+    const port = portsToTry[i];
+    const secure = port === 465;
+    const transporter = getGmailTransporter(port);
+    if (!transporter) continue;
+
+    try {
+      await transporter.verify();
+      return {
+        ok: true,
+        host: cfg.host,
+        port,
+        secure,
+        gmailUser: cfg.gmailUser,
+        fromEmail: cfg.fromEmail,
+      };
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : 'SMTP verification failed';
+      lastError = cfg.gmailAppPassword
+        ? rawMsg.split(cfg.gmailAppPassword).join('[REDACTED]')
+        : rawMsg;
+      if (!isNetworkPortFailure(err)) {
+        return {
+          ok: false,
+          host: cfg.host,
+          port,
+          secure,
+          gmailUser: cfg.gmailUser,
+          fromEmail: cfg.fromEmail,
+          error: lastError,
+        };
+      }
+    }
   }
 
-  try {
-    await transporter.verify();
-    return {
-      ok: true,
-      host: cfg.host,
-      port: cfg.port,
-      secure: cfg.secure,
-      gmailUser: cfg.gmailUser,
-      fromEmail: cfg.fromEmail,
-    };
-  } catch (err) {
-    const rawMsg = err instanceof Error ? err.message : 'SMTP verification failed';
-    const safeMsg = cfg.gmailAppPassword
-      ? rawMsg.split(cfg.gmailAppPassword).join('[REDACTED]')
-      : rawMsg;
-    return {
-      ok: false,
-      host: cfg.host,
-      port: cfg.port,
-      secure: cfg.secure,
-      gmailUser: cfg.gmailUser,
-      fromEmail: cfg.fromEmail,
-      error: safeMsg,
-    };
-  }
+  return {
+    ok: false,
+    host: cfg.host,
+    port: primaryPort,
+    secure: primaryPort === 465,
+    gmailUser: cfg.gmailUser,
+    fromEmail: cfg.fromEmail,
+    error: lastError,
+  };
 }
 
 export function getEmailDiagnostics(requestOrigin?: string, clientOrigin?: string) {

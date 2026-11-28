@@ -32,6 +32,42 @@ export {
   verifyUnsubscribeToken,
 };
 
+export type EmailDispatchResult = {
+  status: 'queued' | 'sent' | 'delivered' | 'simulated' | 'failed';
+  accepted: boolean;
+  messageId: string;
+  error?: string;
+};
+
+export async function dispatchEmailBounded(
+  promise: Promise<EmailDispatchResult>,
+  timeoutMs = 8000
+): Promise<EmailDispatchResult> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const safePromise = promise.catch((err): EmailDispatchResult => ({
+    status: 'failed',
+    accepted: false,
+    messageId: '',
+    error: err instanceof Error ? err.message : 'Email dispatch failed',
+  }));
+  try {
+    return await Promise.race([
+      safePromise,
+      new Promise<EmailDispatchResult>((resolve) => {
+        timer = setTimeout(() => {
+          resolve({
+            status: 'queued',
+            accepted: true,
+            messageId: `queued-${Date.now()}`,
+          });
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function dispatchEmail(params: {
   to: string;
   toName?: string;
@@ -47,12 +83,9 @@ export async function dispatchEmail(params: {
   campaignId?: string;
   jobId?: string;
   dedupeKey?: string;
-}): Promise<{
-  status: 'queued' | 'sent' | 'delivered' | 'simulated' | 'failed';
-  accepted: boolean;
-  messageId: string;
-  error?: string;
-}> {
+  requestOrigin?: string;
+  clientOrigin?: string;
+}): Promise<EmailDispatchResult> {
   // Prevent duplicate sends when an explicit dedupeKey is provided (e.g., digest window or job alert)
   if (params.dedupeKey) {
     const existing = await db.findEmailLogByDedupeKey(params.dedupeKey);
@@ -87,7 +120,7 @@ export async function dispatchEmail(params: {
     return { status: 'failed', accepted: false, messageId: '', error: 'Missing recipient email address.' };
   }
 
-  const cfg = getEffectiveEmailConfig();
+  const cfg = getEffectiveEmailConfig(params.requestOrigin, params.clientOrigin);
   const unsubscribeUrl =
     params.type === 'promotional' && params.userId
       ? `${cfg.clientUrl}/unsubscribe?token=${encodeURIComponent(createUnsubscribeToken(params.userId, recipient))}`
@@ -194,9 +227,11 @@ export async function dispatchEmail(params: {
 
 export async function sendWelcomeEmail(
   user: { _id: string; name: string; email: string; role: string },
-  verificationToken: string
+  verificationToken: string,
+  requestOrigin?: string,
+  clientOrigin?: string
 ) {
-  const { clientUrl } = getEffectiveEmailConfig();
+  const { clientUrl } = getEffectiveEmailConfig(requestOrigin, clientOrigin);
   const verifyUrl = `${clientUrl}/verify-email?token=${encodeURIComponent(verificationToken)}`;
   const tpl = buildWelcomeEmailTemplate({ name: user.name, role: user.role, verifyUrl });
 
@@ -206,15 +241,19 @@ export async function sendWelcomeEmail(
     userId: user._id,
     type: 'transactional',
     templateName: 'welcome_verification',
+    requestOrigin,
+    clientOrigin,
     ...tpl,
   });
 }
 
 export async function sendPasswordResetEmail(
   user: { _id: string; name: string; email: string },
-  resetToken: string
+  resetToken: string,
+  requestOrigin?: string,
+  clientOrigin?: string
 ) {
-  const { clientUrl } = getEffectiveEmailConfig();
+  const { clientUrl } = getEffectiveEmailConfig(requestOrigin, clientOrigin);
   const resetUrl = `${clientUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
   const tpl = buildPasswordResetTemplate({ name: user.name, resetUrl });
   return dispatchEmail({
@@ -223,6 +262,8 @@ export async function sendPasswordResetEmail(
     userId: user._id,
     type: 'transactional',
     templateName: 'password_reset',
+    requestOrigin,
+    clientOrigin,
     ...tpl,
   });
 }
@@ -233,6 +274,8 @@ export async function sendAccountNotificationEmail(params: {
   message: string;
   ctaLabel?: string;
   ctaUrl?: string;
+  requestOrigin?: string;
+  clientOrigin?: string;
 }) {
   const tpl = buildAccountNotificationTemplate({
     name: params.user.name,
@@ -247,6 +290,8 @@ export async function sendAccountNotificationEmail(params: {
     userId: params.user._id,
     type: 'transactional',
     templateName: 'account_notification',
+    requestOrigin: params.requestOrigin,
+    clientOrigin: params.clientOrigin,
     ...tpl,
   });
 }
@@ -254,8 +299,10 @@ export async function sendAccountNotificationEmail(params: {
 export async function sendApplicationConfirmationEmail(params: {
   candidate: { _id: string; name: string; email: string };
   job: JobRecord;
+  requestOrigin?: string;
+  clientOrigin?: string;
 }) {
-  const { clientUrl } = getEffectiveEmailConfig();
+  const { clientUrl } = getEffectiveEmailConfig(params.requestOrigin, params.clientOrigin);
   const tpl = buildApplicationConfirmationTemplate({
     candidateName: params.candidate.name,
     job: params.job,
@@ -268,6 +315,8 @@ export async function sendApplicationConfirmationEmail(params: {
     type: 'transactional',
     templateName: 'application_confirmation',
     jobId: params.job._id,
+    requestOrigin: params.requestOrigin,
+    clientOrigin: params.clientOrigin,
     ...tpl,
   });
 }
@@ -278,8 +327,10 @@ export async function sendApplicationStatusUpdateEmail(params: {
   companyName: string;
   newStatus: string;
   note?: string;
+  requestOrigin?: string;
+  clientOrigin?: string;
 }) {
-  const { clientUrl } = getEffectiveEmailConfig();
+  const { clientUrl } = getEffectiveEmailConfig(params.requestOrigin, params.clientOrigin);
   const applicationsUrl = `${clientUrl}/candidate/applications`;
 
   let templateName = 'application_status_update';
@@ -330,6 +381,8 @@ export async function sendApplicationStatusUpdateEmail(params: {
     userId: params.candidate._id,
     type: 'transactional',
     templateName,
+    requestOrigin: params.requestOrigin,
+    clientOrigin: params.clientOrigin,
     ...tpl,
   });
 }
@@ -346,8 +399,10 @@ export async function sendInterviewEmail(params: {
   meetingLinkOrLocation?: string;
   interviewerName: string;
   instructions?: string;
+  requestOrigin?: string;
+  clientOrigin?: string;
 }) {
-  const { clientUrl } = getEffectiveEmailConfig();
+  const { clientUrl } = getEffectiveEmailConfig(params.requestOrigin, params.clientOrigin);
   const tpl = buildInterviewEmailTemplate({
     candidateName: params.candidate.name,
     jobTitle: params.jobTitle,
@@ -369,6 +424,8 @@ export async function sendInterviewEmail(params: {
     userId: params.candidate._id,
     type: 'transactional',
     templateName: `interview_${params.event}`,
+    requestOrigin: params.requestOrigin,
+    clientOrigin: params.clientOrigin,
     ...tpl,
   });
 }

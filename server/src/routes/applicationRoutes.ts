@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { env } from '../config/env.ts';
+import { env, resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import {
+  dispatchEmailBounded,
   sendApplicationConfirmationEmail,
   sendApplicationStatusUpdateEmail,
 } from '../services/emailService.ts';
@@ -321,13 +322,18 @@ async function updateRecruiterApplicationStatus(req: AuthenticatedRequest, res: 
         console.error('[Application] Failed to push status notification:', err);
       }
       try {
-        const resEmail = await sendApplicationStatusUpdateEmail({
-          candidate,
-          jobTitle,
-          companyName,
-          newStatus: status,
-          note: message,
-        });
+        const resEmail = await dispatchEmailBounded(
+          sendApplicationStatusUpdateEmail({
+            candidate,
+            jobTitle,
+            companyName,
+            newStatus: status,
+            note: message,
+            requestOrigin: resolveRequestOrigin(req),
+            clientOrigin: resolveClientOrigin(req),
+          }),
+          8000
+        );
         emailStatus = resEmail.status;
         emailError = resEmail.error;
       } catch (err) {
@@ -376,13 +382,15 @@ async function bulkUpdateRecruiterStatus(req: AuthenticatedRequest, res: import(
       const candidate = await db.findUserById(app.candidateId);
       const job = await db.findJobById(app.jobId);
       if (candidate && job) {
-        await sendApplicationStatusUpdateEmail({
+        void sendApplicationStatusUpdateEmail({
           candidate,
           jobTitle: job.title,
           companyName: job.companyName,
           newStatus: parsed.data.status,
           note: parsed.data.message,
-        });
+          requestOrigin: resolveRequestOrigin(req),
+          clientOrigin: resolveClientOrigin(req),
+        }).catch((err) => console.error('[Application][Bulk] Status email failed:', err));
         await pushNotification({
           userId: candidate._id,
           type: 'application_status',

@@ -72,7 +72,7 @@ const baseURL = resolveApiBaseUrl();
 
 export const api = axios.create({
   baseURL,
-  timeout: 25000,
+  timeout: 35000,
   withCredentials: true,
   headers: {
     'X-Requested-With': 'XMLHttpRequest',
@@ -280,6 +280,9 @@ export function getApiErrorMessage(err: unknown, fallback = 'Something went wron
     }
     if (err.response?.status === 404) {
       return 'API endpoint not found (404). Make sure the Node/Express backend server is running and VITE_API_URL or reverse-proxy rewrites are configured.';
+    }
+    if (err.code === 'ECONNABORTED') {
+      return 'Request timed out. Please check your connection or try again in a moment.';
     }
     return err.message || fallback;
   }

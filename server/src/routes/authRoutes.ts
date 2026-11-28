@@ -2,13 +2,13 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Router, type Response } from 'express';
 import { z } from 'zod';
-import { env } from '../config/env.ts';
+import { env, integrationStatus, resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import {
   requireAuth,
   verifyCookieRequestOrigin,
   type AuthenticatedRequest,
 } from '../middleware/authMiddleware.ts';
-import { sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService.ts';
+import { dispatchEmailBounded, sendPasswordResetEmail, sendWelcomeEmail } from '../services/emailService.ts';
 import { pushNotification } from '../services/notificationService.ts';
 import { db } from '../store/dataLayer.ts';
 import { sanitizeUser, slugify } from '../utils/sanitize.ts';
@@ -245,7 +245,10 @@ router.post('/register', async (req, res) => {
 
   const verificationToken = signEmailVerificationToken(user._id, user.email);
   await db.updateUser(user._id, { verificationToken });
-  await sendWelcomeEmail(user, verificationToken);
+  await dispatchEmailBounded(
+    sendWelcomeEmail(user, verificationToken, resolveRequestOrigin(req), resolveClientOrigin(req)),
+    8000
+  );
 
   const accessToken = signAccessToken({ userId: user._id, role: user.role, email: user.email });
   const refreshToken = signRefreshToken(user._id);
@@ -362,9 +365,18 @@ router.post('/verify-email', async (req, res) => {
 });
 
 router.post('/forgot-password', async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Email address is required.' });
+  const emailParsed = z.string().trim().email().safeParse(req.body?.email);
+  if (!emailParsed.success) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+  }
+  const email = emailParsed.data.toLowerCase();
+
+  if (env.isProd && !integrationStatus.emailConfigured) {
+    console.error('[Auth][ForgotPassword] Cannot send reset email: GMAIL_USER / GMAIL_APP_PASSWORD not configured.');
+    return res.status(503).json({
+      success: false,
+      message: 'Password reset email service is not configured on this server. Please contact support.',
+    });
   }
 
   const user = await db.findUserByEmail(email);
@@ -373,7 +385,17 @@ router.post('/forgot-password', async (req, res) => {
     const resetTokenHash = hashToken(resetToken);
     const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     await db.updateUser(user._id, { resetTokenHash, resetTokenExpires });
-    await sendPasswordResetEmail(user, resetToken);
+    try {
+      const emailResult = await dispatchEmailBounded(
+        sendPasswordResetEmail(user, resetToken, resolveRequestOrigin(req), resolveClientOrigin(req)),
+        10_000
+      );
+      if (emailResult.status === 'failed') {
+        console.error(`[Auth][ForgotPassword] Reset email failed for ${email}: ${emailResult.error}`);
+      }
+    } catch (err) {
+      console.error(`[Auth][ForgotPassword] Unexpected reset email error for ${email}:`, err);
+    }
 
     return res.json({
       success: true,

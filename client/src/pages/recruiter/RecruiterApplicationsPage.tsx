@@ -292,6 +292,10 @@ export function RecruiterApplicationsPage() {
         toast.warning(
           `Interview ${isReschedule ? 'rescheduled' : 'scheduled'} & candidate notified in-app, but email failed: ${emailError || 'Check Gmail SMTP sender configuration.'}`
         );
+      } else if (emailStatus === 'queued') {
+        toast.success(
+          `Interview ${isReschedule ? 'rescheduled' : 'scheduled'} & candidate notified in-app. Email notification queued.`
+        );
       } else if (emailStatus === 'simulated') {
         toast.success(
           `Interview ${isReschedule ? 'rescheduled' : 'scheduled'} & candidate notified in-app (email logged in preview mode).`

@@ -21,7 +21,10 @@ function sanitizeSmtpErrorMessage(raw: string, secret?: string): string {
   return cleaned.replace(/\s+/g, ' ').trim();
 }
 
-function classifySmtpFailure(err: unknown, secret?: string): { message: string; retryable: boolean } {
+function classifySmtpFailure(
+  err: unknown,
+  secret?: string
+): { message: string; retryable: boolean; networkTimeout: boolean } {
   const e = (err && typeof err === 'object' ? err : {}) as SmtpErrorLike;
   const code = String(e.code || '').toUpperCase();
   const responseCode = typeof e.responseCode === 'number' ? e.responseCode : 0;
@@ -42,6 +45,7 @@ function classifySmtpFailure(err: unknown, secret?: string): { message: string; 
       message:
         'Gmail SMTP authentication failed. Verify GMAIL_USER and a 16-character Google App Password (with 2-Step Verification enabled).',
       retryable: false,
+      networkTimeout: false,
     };
   }
 
@@ -59,22 +63,26 @@ function classifySmtpFailure(err: unknown, secret?: string): { message: string; 
     return {
       message: `Gmail SMTP rejected message (${responseCode || code || '5xx'}): ${rawMessage}`,
       retryable: false,
+      networkTimeout: false,
     };
   }
 
-  // Transient socket / timeout / temporary 4xx throttling: retry cleanly
-  const isTransient =
+  const networkTimeout =
     code === 'ETIMEDOUT' ||
     code === 'ESOCKET' ||
-    code === 'ECONNRESET' ||
     code === 'ECONNREFUSED' ||
     code === 'ECONNECTION' ||
-    code === 'EAI_AGAIN' ||
-    (responseCode >= 400 && responseCode < 500);
+    code === 'ENETUNREACH' ||
+    code === 'EHOSTUNREACH' ||
+    code === 'EAI_AGAIN';
+
+  // Temporary 4xx SMTP response after connecting: worth a fast retry on the same port
+  const isTransient4xx = responseCode >= 400 && responseCode < 500;
 
   return {
     message: `Gmail SMTP error${responseCode ? ` (${responseCode})` : ''}: ${rawMessage}`,
-    retryable: isTransient,
+    retryable: isTransient4xx,
+    networkTimeout,
   };
 }
 
@@ -121,8 +129,8 @@ export async function sendGmailSmtpEmail(params: {
     };
   }
 
-  const transporter = getGmailTransporter();
-  if (!transporter) {
+  const primaryTransporter = getGmailTransporter(cfg.port);
+  if (!primaryTransporter) {
     return {
       accepted: false,
       status: 'failed',
@@ -163,11 +171,12 @@ export async function sendGmailSmtpEmail(params: {
   };
 
   let lastError = 'Gmail SMTP dispatch failed';
-  const maxAttempts = 3;
+  const fallbackPort = cfg.port === 465 ? 587 : 465;
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  // Attempt 1 (with up to 1 fast 4xx retry on primary port), then 1 alternate-port fallback on network timeout
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const info = await transporter.sendMail(mailOptions);
+      const info = await primaryTransporter.sendMail(mailOptions);
       const messageId = sanitizeHeaderText(info.messageId || `gmail-${Date.now()}`);
       return {
         accepted: true,
@@ -177,7 +186,23 @@ export async function sendGmailSmtpEmail(params: {
     } catch (err) {
       const classified = classifySmtpFailure(err, cfg.gmailAppPassword);
       lastError = classified.message;
-      if (!classified.retryable || attempt === maxAttempts) {
+
+      if (classified.networkTimeout) {
+        const fallbackTransporter = getGmailTransporter(fallbackPort);
+        if (fallbackTransporter) {
+          try {
+            const info = await fallbackTransporter.sendMail(mailOptions);
+            const messageId = sanitizeHeaderText(info.messageId || `gmail-${Date.now()}`);
+            return {
+              accepted: true,
+              status: 'sent',
+              messageId,
+            };
+          } catch (fallbackErr) {
+            const fallbackClassified = classifySmtpFailure(fallbackErr, cfg.gmailAppPassword);
+            lastError = fallbackClassified.message;
+          }
+        }
         return {
           accepted: false,
           status: 'failed',
@@ -185,7 +210,16 @@ export async function sendGmailSmtpEmail(params: {
           error: lastError,
         };
       }
-      await sleep(500 * attempt);
+
+      if (!classified.retryable || attempt === 2) {
+        return {
+          accepted: false,
+          status: 'failed',
+          messageId: '',
+          error: lastError,
+        };
+      }
+      await sleep(400 * attempt);
     }
   }
 

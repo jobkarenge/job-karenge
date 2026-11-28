@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
-import { sendInterviewEmail } from '../services/emailService.ts';
+import { dispatchEmailBounded, sendInterviewEmail } from '../services/emailService.ts';
 import { pushNotification } from '../services/notificationService.ts';
 import { db } from '../store/dataLayer.ts';
 import { sanitizeUser } from '../utils/sanitize.ts';
@@ -133,19 +134,24 @@ router.post('/', requireAuth, requireRole('recruiter', 'admin'), async (req: Aut
     }
 
     try {
-      const emailResult = await sendInterviewEmail({
-        candidate,
-        jobTitle,
-        companyName,
-        event: 'scheduled',
-        date: interview.date,
-        time: interview.time,
-        timezone: interview.timezone,
-        type: interview.type,
-        meetingLinkOrLocation: interview.meetingLinkOrLocation,
-        interviewerName: interview.interviewerName,
-        instructions: interview.instructions,
-      });
+      const emailResult = await dispatchEmailBounded(
+        sendInterviewEmail({
+          candidate,
+          jobTitle,
+          companyName,
+          event: 'scheduled',
+          date: interview.date,
+          time: interview.time,
+          timezone: interview.timezone,
+          type: interview.type,
+          meetingLinkOrLocation: interview.meetingLinkOrLocation,
+          interviewerName: interview.interviewerName,
+          instructions: interview.instructions,
+          requestOrigin: resolveRequestOrigin(req),
+          clientOrigin: resolveClientOrigin(req),
+        }),
+        8000
+      );
       emailStatus = emailResult.status;
       emailError = emailResult.error;
     } catch (err) {
@@ -235,19 +241,24 @@ router.put('/:id', requireAuth, requireRole('recruiter', 'admin'), async (req: A
     }
 
     try {
-      const emailResult = await sendInterviewEmail({
-        candidate,
-        jobTitle,
-        companyName,
-        event: nextStatus === 'Cancelled' ? 'cancelled' : 'rescheduled',
-        date: updated.date,
-        time: updated.time,
-        timezone: updated.timezone,
-        type: updated.type,
-        meetingLinkOrLocation: updated.meetingLinkOrLocation,
-        interviewerName: updated.interviewerName,
-        instructions: updated.instructions,
-      });
+      const emailResult = await dispatchEmailBounded(
+        sendInterviewEmail({
+          candidate,
+          jobTitle,
+          companyName,
+          event: nextStatus === 'Cancelled' ? 'cancelled' : 'rescheduled',
+          date: updated.date,
+          time: updated.time,
+          timezone: updated.timezone,
+          type: updated.type,
+          meetingLinkOrLocation: updated.meetingLinkOrLocation,
+          interviewerName: updated.interviewerName,
+          instructions: updated.instructions,
+          requestOrigin: resolveRequestOrigin(req),
+          clientOrigin: resolveClientOrigin(req),
+        }),
+        8000
+      );
       emailStatus = emailResult.status;
       emailError = emailResult.error;
     } catch (err) {
@@ -321,18 +332,23 @@ router.delete('/:id', requireAuth, requireRole('recruiter', 'admin'), async (req
       console.error('[Interview] Failed to push cancellation notification:', err);
     }
     try {
-      const emailResult = await sendInterviewEmail({
-        candidate,
-        jobTitle,
-        companyName,
-        event: 'cancelled',
-        date: existing.date,
-        time: existing.time,
-        timezone: existing.timezone,
-        type: existing.type,
-        meetingLinkOrLocation: existing.meetingLinkOrLocation,
-        interviewerName: existing.interviewerName,
-      });
+      const emailResult = await dispatchEmailBounded(
+        sendInterviewEmail({
+          candidate,
+          jobTitle,
+          companyName,
+          event: 'cancelled',
+          date: existing.date,
+          time: existing.time,
+          timezone: existing.timezone,
+          type: existing.type,
+          meetingLinkOrLocation: existing.meetingLinkOrLocation,
+          interviewerName: existing.interviewerName,
+          requestOrigin: resolveRequestOrigin(req),
+          clientOrigin: resolveClientOrigin(req),
+        }),
+        8000
+      );
       emailStatus = emailResult.status;
       emailError = emailResult.error;
     } catch (err) {

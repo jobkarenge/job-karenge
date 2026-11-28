@@ -8,6 +8,7 @@ export function RecruiterInterviewsPage() {
   const [interviews, setInterviews] = useState<Interview[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Interview | null>(null);
+  const [saving, setSaving] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
 
   const load = () => {
@@ -24,7 +25,8 @@ export function RecruiterInterviewsPage() {
 
   const handleReschedule = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editing) return;
+    if (!editing || saving) return;
+    setSaving(true);
     try {
       const res = await api.put(`/interviews/${editing._id}`, {
         date: editing.date,
@@ -40,6 +42,10 @@ export function RecruiterInterviewsPage() {
         toast.warning(
           `Interview rescheduled & candidate notified in-app, but email failed: ${emailError || 'Check Gmail SMTP sender configuration.'}`
         );
+      } else if (emailStatus === 'queued') {
+        toast.success('Interview rescheduled & candidate notified in-app. Email notification queued.');
+      } else if (emailStatus === 'simulated') {
+        toast.success('Interview rescheduled & candidate notified in-app (email logged in preview mode).');
       } else {
         toast.success('Interview rescheduled & candidate notified.');
       }
@@ -47,6 +53,8 @@ export function RecruiterInterviewsPage() {
       load();
     } catch (err) {
       toast.error(getApiErrorMessage(err));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -212,13 +220,18 @@ export function RecruiterInterviewsPage() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
+                  disabled={saving}
                   onClick={() => setEditing(null)}
-                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700"
+                  className="px-4 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-60"
                 >
                   Close
                 </button>
-                <button type="submit" className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#102A43] dark:bg-blue-600 text-white">
-                  Save Changes
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#102A43] dark:bg-blue-600 text-white disabled:opacity-60"
+                >
+                  {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>

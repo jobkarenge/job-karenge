@@ -95,6 +95,7 @@ export const env = {
   cloudinaryApiKey,
   cloudinaryApiSecret,
   emailProvider: cleanEnvValue(process.env.EMAIL_PROVIDER) || 'gmail',
+  gmailSmtpPort: Number(cleanEnvValue(process.env.GMAIL_SMTP_PORT) || 465) === 587 ? 587 : 465,
   gmailUser: cleanEnvValue(process.env.GMAIL_USER).replace(/^GMAIL_USER\s*=\s*/i, '').trim(),
   gmailAppPassword: cleanGmailAppPassword(process.env.GMAIL_APP_PASSWORD),
   emailFromName:

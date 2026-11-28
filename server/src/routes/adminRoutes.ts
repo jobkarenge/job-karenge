@@ -4,6 +4,7 @@ import { integrationStatus, resolveClientOrigin, resolveRequestOrigin } from '..
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import {
   dispatchEmail,
+  dispatchEmailBounded,
   getEmailDiagnostics,
   recomputeCampaignStatsFromLogs,
   sendAccountNotificationEmail,
@@ -139,16 +140,21 @@ router.patch('/recruiters/:userId/verification', async (req: AuthenticatedReques
     const clientUrl =
       db.getPlatformSettings().clientUrl?.trim() ||
       getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req)).clientUrl;
-    await sendAccountNotificationEmail({
-      user: recruiterUser,
-      title: parsed.data.status === 'approved' ? 'Recruiter Account Verified' : 'Recruiter Verification Update',
-      message:
-        parsed.data.status === 'approved'
-          ? 'Your recruiter profile has been verified by our admin team. You can now publish live job openings on Job Karenge.'
-          : `Your recruiter verification status is currently rejected: ${parsed.data.reason || 'Please review your company profile details.'}`,
-      ctaLabel: parsed.data.status === 'approved' ? 'Post a New Job' : 'Review Company Profile',
-      ctaUrl: `${clientUrl}${parsed.data.status === 'approved' ? '/recruiter/jobs/new' : '/recruiter/company'}`,
-    });
+    await dispatchEmailBounded(
+      sendAccountNotificationEmail({
+        user: recruiterUser,
+        title: parsed.data.status === 'approved' ? 'Recruiter Account Verified' : 'Recruiter Verification Update',
+        message:
+          parsed.data.status === 'approved'
+            ? 'Your recruiter profile has been verified by our admin team. You can now publish live job openings on Job Karenge.'
+            : `Your recruiter verification status is currently rejected: ${parsed.data.reason || 'Please review your company profile details.'}`,
+        ctaLabel: parsed.data.status === 'approved' ? 'Post a New Job' : 'Review Company Profile',
+        ctaUrl: `${clientUrl}${parsed.data.status === 'approved' ? '/recruiter/jobs/new' : '/recruiter/company'}`,
+        requestOrigin: resolveRequestOrigin(req),
+        clientOrigin: resolveClientOrigin(req),
+      }),
+      8000
+    );
   }
 
   await db.createAuditLog({
