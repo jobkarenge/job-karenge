@@ -1,3 +1,4 @@
+import dns from 'node:dns';
 import nodemailer, { type Transporter, type TransportOptions } from 'nodemailer';
 import {
   cloudinaryMeta,
@@ -5,8 +6,15 @@ import {
   hasExplicitClientUrlEnv,
   hasExplicitServerUrlEnv,
   integrationStatus,
+  isLocalhostUrl,
 } from './env.ts';
 import { db } from '../store/dataLayer.ts';
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {
+  // Ignore on runtimes that disallow changing DNS result order
+}
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export const GMAIL_SMTP_HOST = 'smtp.gmail.com';
@@ -37,6 +45,24 @@ function maskEmailAddress(email: string): string {
   return `${trimmed.slice(0, 2)}***${trimmed.slice(at)}`;
 }
 
+export function resolveEffectiveClientUrl(
+  settingsClientUrl?: string,
+  requestOrigin?: string,
+  clientOrigin?: string
+): string {
+  const candidates = [
+    settingsClientUrl,
+    hasExplicitClientUrlEnv ? env.clientUrl : undefined,
+    clientOrigin,
+    requestOrigin,
+  ]
+    .map((u) => (u || '').trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  const nonLocal = candidates.find((u) => !isLocalhostUrl(u));
+  return nonLocal || candidates[0] || env.clientUrl.replace(/\/+$/, '');
+}
+
 export function getEffectiveEmailConfig(requestOrigin?: string, clientOrigin?: string) {
   const settings = db.getPlatformSettings();
   const rawFromEmail =
@@ -49,14 +75,11 @@ export function getEffectiveEmailConfig(requestOrigin?: string, clientOrigin?: s
     env.emailFromName;
   const sender = parseSenderAddress(rawFromEmail, rawFromName);
 
-  const fallbackClientUrl = hasExplicitClientUrlEnv
-    ? env.clientUrl
-    : clientOrigin || requestOrigin || env.clientUrl;
   const fallbackServerUrl = hasExplicitServerUrlEnv
     ? env.serverUrl
     : requestOrigin || env.serverUrl;
 
-  const clientUrl = (settings.clientUrl?.trim() || fallbackClientUrl).replace(/\/+$/, '');
+  const clientUrl = resolveEffectiveClientUrl(settings.clientUrl, requestOrigin, clientOrigin);
   const serverUrl = (settings.serverUrl?.trim() || fallbackServerUrl).replace(/\/+$/, '');
 
   return {
@@ -83,9 +106,37 @@ export function getEffectiveEmailConfig(requestOrigin?: string, clientOrigin?: s
   };
 }
 
+let cachedIpv4: { address: string; expiresAt: number } | null = null;
+let lastWorkingGmailPort: 465 | 587 | null = null;
+
+export function getPreferredGmailPort(defaultPort: number): 465 | 587 {
+  if (lastWorkingGmailPort) return lastWorkingGmailPort;
+  return defaultPort === 587 ? 587 : 465;
+}
+
+export function markWorkingGmailPort(port: 465 | 587): void {
+  lastWorkingGmailPort = port;
+}
+
+export async function resolveGmailIpv4Host(): Promise<string> {
+  if (cachedIpv4 && cachedIpv4.expiresAt > Date.now()) {
+    return cachedIpv4.address;
+  }
+  try {
+    const addresses = await dns.promises.resolve4(GMAIL_SMTP_HOST);
+    if (addresses.length > 0 && addresses[0]) {
+      cachedIpv4 = { address: addresses[0], expiresAt: Date.now() + 5 * 60_000 };
+      return addresses[0];
+    }
+  } catch {
+    // Fall back to hostname resolution inside Nodemailer
+  }
+  return GMAIL_SMTP_HOST;
+}
+
 const transporterCache = new Map<string, Transporter>();
 
-export function getGmailTransporter(portOverride?: number): Transporter | null {
+export function getGmailTransporter(portOverride?: number, hostOverride?: string): Transporter | null {
   const cfg = getEffectiveEmailConfig();
   if (!cfg.gmailUser || !cfg.gmailAppPassword) {
     return null;
@@ -93,21 +144,23 @@ export function getGmailTransporter(portOverride?: number): Transporter | null {
 
   const targetPort = portOverride === 587 ? 587 : portOverride === 465 ? 465 : cfg.port;
   const targetSecure = targetPort === 465;
-  const signature = `${cfg.host}:${targetPort}:${cfg.gmailUser}:${cfg.gmailAppPassword.length}`;
-  const existing = transporterCache.get(signature);
-  if (existing) {
-    return existing;
+  const activeIpv4 = cachedIpv4 && cachedIpv4.expiresAt > Date.now() ? cachedIpv4.address : undefined;
+  const connectHost = (hostOverride || activeIpv4 || cfg.host).trim() || cfg.host;
+  const signature = `${connectHost}:${targetPort}:${cfg.gmailUser}:${cfg.gmailAppPassword.length}`;
+  if (!hostOverride) {
+    const existing = transporterCache.get(signature);
+    if (existing) {
+      return existing;
+    }
   }
 
   const transporter = nodemailer.createTransport({
-    host: cfg.host,
+    host: connectHost,
     port: targetPort,
     secure: targetSecure,
     ...(targetSecure ? {} : { requireTLS: true }),
-    family: 4,
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
+    servername: cfg.host,
+    pool: false,
     connectionTimeout: 5_000,
     greetingTimeout: 5_000,
     socketTimeout: 10_000,
@@ -121,7 +174,9 @@ export function getGmailTransporter(portOverride?: number): Transporter | null {
     },
   } as TransportOptions);
 
-  transporterCache.set(signature, transporter);
+  if (!hostOverride) {
+    transporterCache.set(signature, transporter);
+  }
   return transporter;
 }
 
@@ -160,19 +215,21 @@ export async function verifyGmailSmtpConnection(): Promise<{
     };
   }
 
-  const primaryPort = cfg.port;
-  const fallbackPort = primaryPort === 465 ? 587 : 465;
-  const portsToTry = [primaryPort, fallbackPort];
+  const primaryPort = getPreferredGmailPort(cfg.port);
+  const fallbackPort: 465 | 587 = primaryPort === 465 ? 587 : 465;
+  const portsToTry: Array<465 | 587> = [primaryPort, fallbackPort];
+  const resolvedHost = await resolveGmailIpv4Host();
   let lastError = 'SMTP verification failed';
 
   for (let i = 0; i < portsToTry.length; i++) {
     const port = portsToTry[i];
     const secure = port === 465;
-    const transporter = getGmailTransporter(port);
+    const transporter = getGmailTransporter(port, resolvedHost);
     if (!transporter) continue;
 
     try {
       await transporter.verify();
+      markWorkingGmailPort(port);
       return {
         ok: true,
         host: cfg.host,
@@ -218,9 +275,7 @@ export function getEmailDiagnostics(requestOrigin?: string, clientOrigin?: strin
     ? `configured (${appPasswordLen} chars)`
     : 'not configured';
   const defaultSender = parseSenderAddress(env.emailFromEmail, env.emailFromName);
-  const envDefaultClientUrl = hasExplicitClientUrlEnv
-    ? env.clientUrl
-    : clientOrigin || requestOrigin || env.clientUrl;
+  const envDefaultClientUrl = resolveEffectiveClientUrl(undefined, requestOrigin, clientOrigin);
   const envDefaultServerUrl = hasExplicitServerUrlEnv
     ? env.serverUrl
     : requestOrigin || env.serverUrl;

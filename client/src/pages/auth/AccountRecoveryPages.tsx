@@ -49,18 +49,29 @@ export function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [previewToken, setPreviewToken] = useState<string | null>(null);
+  const [sentInfo, setSentInfo] = useState<{ email: string; message: string } | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
+    setSentInfo(null);
+    setPreviewToken(null);
     try {
       const res = await api.post('/auth/forgot-password', { email });
       toast.success(res.data.message);
+      setSentInfo({
+        email: email.trim(),
+        message: res.data.message,
+      });
       if (res.data.resetTokenPreview) {
         setPreviewToken(res.data.resetTokenPreview);
       }
     } catch (err) {
-      toast.error(getApiErrorMessage(err));
+      const msg = getApiErrorMessage(err);
+      setErrorMessage(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -93,6 +104,24 @@ export function ForgotPasswordPage() {
             {loading ? 'Sending...' : 'Send Reset Link'}
           </button>
         </form>
+
+        {errorMessage && (
+          <div className="mt-4 p-3 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 text-xs text-red-700 dark:text-red-300">
+            {errorMessage}
+          </div>
+        )}
+
+        {sentInfo && (
+          <div className="mt-4 p-3.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 text-xs space-y-1.5">
+            <p className="font-semibold text-emerald-900 dark:text-emerald-200">{sentInfo.message}</p>
+            <p className="text-emerald-800 dark:text-emerald-300">
+              Please check the inbox and Spam/Promotions folder for <span className="font-medium">{sentInfo.email}</span> and click the Reset Password link to set a new password.
+            </p>
+            <Link to="/login" className="inline-block font-medium text-emerald-700 dark:text-emerald-300 underline">
+              Back to Sign In
+            </Link>
+          </div>
+        )}
 
         {previewToken && (
           <div className="mt-4 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 text-xs">
@@ -138,35 +167,49 @@ export function ResetPasswordPage() {
       <div className="w-full max-w-md rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8">
         <BrandLogo to="/" />
         <h1 className="mt-6 text-2xl font-bold">Set New Password</h1>
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1">New Password</label>
-            <PasswordInput
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
-            />
+        {!token ? (
+          <div className="mt-4 space-y-4">
+            <p className="text-sm text-red-600 dark:text-red-400">
+              This password reset link is missing or invalid. Please request a new password reset link.
+            </p>
+            <Link
+              to="/forgot-password"
+              className="inline-block w-full text-center py-2.5 rounded-lg bg-[#102A43] dark:bg-blue-600 text-white text-sm font-semibold"
+            >
+              Request New Reset Link
+            </Link>
           </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Confirm New Password</label>
-            <PasswordInput
-              required
-              minLength={8}
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full py-2.5 rounded-lg bg-[#102A43] dark:bg-blue-600 text-white text-sm font-semibold disabled:opacity-60"
-          >
-            {loading ? 'Updating...' : 'Update Password'}
-          </button>
-        </form>
+        ) : (
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <div>
+              <label className="block text-xs font-medium mb-1">New Password</label>
+              <PasswordInput
+                required
+                minLength={8}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium mb-1">Confirm New Password</label>
+              <PasswordInput
+                required
+                minLength={8}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-transparent"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-lg bg-[#102A43] dark:bg-blue-600 text-white text-sm font-semibold disabled:opacity-60"
+            >
+              {loading ? 'Updating...' : 'Update Password'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

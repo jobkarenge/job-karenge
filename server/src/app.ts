@@ -39,8 +39,8 @@ export function createExpressApp() {
 
   const allowedOrigins = new Set(
     [
-      ...env.clientUrl.split(',').map((s) => s.trim()),
-      env.serverUrl,
+      ...env.clientUrl.split(',').map((s) => s.trim().replace(/\/+$/, '')),
+      env.serverUrl.replace(/\/+$/, ''),
       'http://localhost:3000',
       'http://127.0.0.1:3000',
     ].filter(Boolean)

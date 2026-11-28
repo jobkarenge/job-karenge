@@ -2,6 +2,9 @@ import {
   EMAIL_PATTERN,
   getEffectiveEmailConfig,
   getGmailTransporter,
+  getPreferredGmailPort,
+  markWorkingGmailPort,
+  resolveGmailIpv4Host,
   sanitizeHeaderText,
 } from '../config/mailer.ts';
 
@@ -72,9 +75,13 @@ function classifySmtpFailure(
     code === 'ESOCKET' ||
     code === 'ECONNREFUSED' ||
     code === 'ECONNECTION' ||
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ETLS' ||
     code === 'ENETUNREACH' ||
     code === 'EHOSTUNREACH' ||
-    code === 'EAI_AGAIN';
+    code === 'EAI_AGAIN' ||
+    /timeout|timed out|greeting never received|unexpected socket close|socket hang up/i.test(rawMessage);
 
   // Temporary 4xx SMTP response after connecting: worth a fast retry on the same port
   const isTransient4xx = responseCode >= 400 && responseCode < 500;
@@ -129,7 +136,9 @@ export async function sendGmailSmtpEmail(params: {
     };
   }
 
-  const primaryTransporter = getGmailTransporter(cfg.port);
+  await resolveGmailIpv4Host();
+  const primaryPort = getPreferredGmailPort(cfg.port);
+  const primaryTransporter = getGmailTransporter(primaryPort);
   if (!primaryTransporter) {
     return {
       accepted: false,
@@ -171,12 +180,13 @@ export async function sendGmailSmtpEmail(params: {
   };
 
   let lastError = 'Gmail SMTP dispatch failed';
-  const fallbackPort = cfg.port === 465 ? 587 : 465;
+  const fallbackPort: 465 | 587 = primaryPort === 465 ? 587 : 465;
 
   // Attempt 1 (with up to 1 fast 4xx retry on primary port), then 1 alternate-port fallback on network timeout
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const info = await primaryTransporter.sendMail(mailOptions);
+      markWorkingGmailPort(primaryPort);
       const messageId = sanitizeHeaderText(info.messageId || `gmail-${Date.now()}`);
       return {
         accepted: true,
@@ -192,6 +202,7 @@ export async function sendGmailSmtpEmail(params: {
         if (fallbackTransporter) {
           try {
             const info = await fallbackTransporter.sendMail(mailOptions);
+            markWorkingGmailPort(fallbackPort);
             const messageId = sanitizeHeaderText(info.messageId || `gmail-${Date.now()}`);
             return {
               accepted: true,

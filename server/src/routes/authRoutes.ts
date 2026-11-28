@@ -385,21 +385,44 @@ router.post('/forgot-password', async (req, res) => {
     const resetTokenHash = hashToken(resetToken);
     const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     await db.updateUser(user._id, { resetTokenHash, resetTokenExpires });
+    let emailStatus: 'queued' | 'sent' | 'delivered' | 'simulated' | 'failed' = 'sent';
     try {
       const emailResult = await dispatchEmailBounded(
         sendPasswordResetEmail(user, resetToken, resolveRequestOrigin(req), resolveClientOrigin(req)),
-        10_000
+        22_000
       );
-      if (emailResult.status === 'failed') {
-        console.error(`[Auth][ForgotPassword] Reset email failed for ${email}: ${emailResult.error}`);
+      emailStatus = emailResult.status;
+      if (emailResult.status === 'failed' || (env.isProd && emailResult.status === 'queued')) {
+        const failureReason =
+          emailResult.status === 'queued'
+            ? 'SMTP connection timed out while connecting to Gmail from the server.'
+            : emailResult.error || 'Email transport did not accept the message.';
+        console.error(`[Auth][ForgotPassword] Reset email failed for ${email}: ${failureReason}`);
+        return res.status(502).json({
+          success: false,
+          message: `Unable to send password reset email: ${failureReason}`,
+        });
+      }
+      if (env.isProd && emailResult.status === 'simulated') {
+        console.error(`[Auth][ForgotPassword] Reset email simulated in production for ${email}.`);
+        return res.status(503).json({
+          success: false,
+          message: 'Password reset email service is not configured on this server. Please contact support.',
+        });
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Email dispatch failed';
       console.error(`[Auth][ForgotPassword] Unexpected reset email error for ${email}:`, err);
+      return res.status(502).json({
+        success: false,
+        message: `Unable to send password reset email: ${msg}`,
+      });
     }
 
     return res.json({
       success: true,
       message: 'If an account matches this email, a reset link has been sent.',
+      emailStatus,
       resetTokenPreview: env.isProd ? undefined : resetToken,
     });
   }

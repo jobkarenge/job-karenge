@@ -132,6 +132,17 @@ export const integrationStatus = {
   emailConfigured: Boolean(env.gmailUser && env.gmailAppPassword),
 };
 
+export function isLocalhostUrl(value?: string): boolean {
+  const raw = (value || '').trim();
+  if (!raw) return false;
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
+  } catch {
+    return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|\/|$)/i.test(raw);
+  }
+}
+
 export function resolveRequestOrigin(req?: Pick<Request, 'headers' | 'protocol' | 'get'>): string | undefined {
   if (!req) return undefined;
   const forwardedProto = String(req.headers['x-forwarded-proto'] || req.protocol || 'http')
@@ -147,14 +158,17 @@ export function resolveRequestOrigin(req?: Pick<Request, 'headers' | 'protocol' 
 export function resolveClientOrigin(req?: Pick<Request, 'headers' | 'get'>): string | undefined {
   if (!req) return undefined;
   const rawOrigin = String(req.get('origin') || req.headers.origin || '').trim();
-  if (!rawOrigin) return undefined;
-  try {
-    const parsed = new URL(rawOrigin);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return parsed.origin.replace(/\/+$/, '');
+  const rawReferer = String(req.get('referer') || req.headers.referer || '').trim();
+  for (const candidate of [rawOrigin, rawReferer]) {
+    if (!candidate) continue;
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.origin.replace(/\/+$/, '');
+      }
+    } catch {
+      // try next candidate
     }
-  } catch {
-    return undefined;
   }
   return undefined;
 }
