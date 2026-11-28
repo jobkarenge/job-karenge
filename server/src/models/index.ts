@@ -13,8 +13,8 @@ const userSchema = new Schema(
     profileImagePublicId: { type: String, default: '' },
     location: { type: String, default: '' },
     verificationToken: { type: String, default: '' },
-    resetTokenHash: { type: String, default: '', index: true },
-    resetTokenExpires: { type: Date },
+    passwordResetTokenHash: { type: String, default: '', index: true },
+    passwordResetExpires: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -25,7 +25,7 @@ export function buildPasswordResetTemplate(params: {
     title: 'Password Reset Request',
     preheader: 'Use this secure link to set a new password.',
     bodyHtml: `<p>Hello ${escapeHtml(params.name)},</p>
-      <p>We received a request to reset the password for your Job Karenge account. This link expires in 60 minutes.</p>
+      <p>We received a request to reset the password for your Job Karenge account. This link expires in 15 minutes.</p>
       <p style="font-size:13px;color:#64748b;">If you did not request a password reset, you can safely ignore this email.</p>`,
     ctaLabel: 'Reset Password',
     ctaUrl: params.resetUrl,

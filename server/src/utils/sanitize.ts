@@ -13,10 +13,23 @@ export function stripNoSqlOperators<T>(value: T): T {
   return value;
 }
 
-export function sanitizeUser<T extends { passwordHash?: string; verificationToken?: string; resetTokenHash?: string }>(
+export function sanitizeUser<
+  T extends {
+    passwordHash?: string;
+    verificationToken?: string;
+    passwordResetTokenHash?: string;
+    passwordResetExpires?: string | null;
+  },
+>(
   user: T
-): Omit<T, 'passwordHash' | 'verificationToken' | 'resetTokenHash'> {
-  const { passwordHash: _p, verificationToken: _v, resetTokenHash: _r, ...safe } = user;
+): Omit<T, 'passwordHash' | 'verificationToken' | 'passwordResetTokenHash' | 'passwordResetExpires'> {
+  const {
+    passwordHash: _p,
+    verificationToken: _v,
+    passwordResetTokenHash: _prh,
+    passwordResetExpires: _pre,
+    ...safe
+  } = user;
   return safe;
 }
 

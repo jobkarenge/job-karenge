@@ -44,3 +44,16 @@ export function verifyEmailVerificationToken(token: string): { userId: string; e
   if (decoded.purpose !== 'verify_email') throw new Error('Invalid verification token');
   return { userId: decoded.userId, email: decoded.email };
 }
+
+export const PASSWORD_RESET_TTL_MS = 15 * 60 * 1000;
+
+export function generatePasswordResetToken(): {
+  token: string;
+  tokenHash: string;
+  expiresAt: string;
+} {
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
+  return { token, tokenHash, expiresAt };
+}

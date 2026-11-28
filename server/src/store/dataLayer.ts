@@ -59,7 +59,7 @@ function nowIso(): string {
 
 const JOB_LIST_OMIT =
   '-responsibilities -requiredQualifications -preferredQualifications -benefits -applicationInstructions -contactPerson -contactEmail -contactPhone';
-const USER_SAFE_OMIT = '-passwordHash -verificationToken -resetTokenHash -resetTokenExpires';
+const USER_SAFE_OMIT = '-passwordHash -verificationToken -passwordResetTokenHash -passwordResetExpires';
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1283,6 +1283,23 @@ export const db = {
     this.saveState();
   },
 
+  async revokeAllRefreshTokensForUser(userId: string): Promise<void> {
+    if (!userId) return;
+    if (isMongoConnected()) {
+      await Models.RefreshToken.updateMany({ userId, revoked: false }, { revoked: true });
+      return;
+    }
+    const state = this.getState();
+    let changed = false;
+    state.refreshTokens.forEach((t) => {
+      if (t.userId === userId && !t.revoked) {
+        t.revoked = true;
+        changed = true;
+      }
+    });
+    if (changed) this.saveState();
+  },
+
   // Platform settings
   getPlatformSettings(): PlatformSettingsRecord {
     const defaults = createInitialSeed().platformSettings;
@@ -1339,19 +1356,26 @@ export const db = {
     if (!tokenHash) return null;
     if (isMongoConnected()) {
       const doc = await Models.User.findOne({
-        resetTokenHash: tokenHash,
-        resetTokenExpires: { $gt: new Date() },
+        passwordResetTokenHash: tokenHash,
+        passwordResetExpires: { $gt: new Date() },
       }).lean();
       return doc ? { ...(doc as unknown as UserRecord), _id: String(doc._id) } : null;
     }
     return (
       this.getState().users.find(
-        (u) => u.resetTokenHash === tokenHash && u.resetTokenExpires && new Date(u.resetTokenExpires).getTime() > Date.now()
+        (u) =>
+          u.passwordResetTokenHash === tokenHash &&
+          u.passwordResetExpires &&
+          new Date(u.passwordResetExpires).getTime() > Date.now()
       ) || null
     );
   },
 
-  async listUsersSafe(filters?: { role?: string; q?: string }): Promise<Omit<UserRecord, 'passwordHash' | 'verificationToken' | 'resetTokenHash' | 'resetTokenExpires'>[]> {
+  async listUsersSafe(
+    filters?: { role?: string; q?: string }
+  ): Promise<
+    Omit<UserRecord, 'passwordHash' | 'verificationToken' | 'passwordResetTokenHash' | 'passwordResetExpires'>[]
+  > {
     if (isMongoConnected()) {
       const query: Record<string, unknown> = {};
       if (filters?.role) query.role = filters.role;
@@ -1370,7 +1394,15 @@ export const db = {
     }
     return users
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .map(({ passwordHash: _p, verificationToken: _v, resetTokenHash: _r, resetTokenExpires: _re, ...rest }) => rest);
+      .map(
+        ({
+          passwordHash: _p,
+          verificationToken: _v,
+          passwordResetTokenHash: _prh,
+          passwordResetExpires: _pre,
+          ...rest
+        }) => rest
+      );
   },
 
   async listUsersByIds(ids: string[]): Promise<UserRecord[]> {

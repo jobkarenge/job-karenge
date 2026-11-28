@@ -1,3 +1,4 @@
+import { env } from '../config/env.ts';
 import {
   getEffectiveEmailConfig,
   getEmailDiagnostics,
@@ -150,6 +151,11 @@ export async function dispatchEmail(params: {
     .filter(Boolean)
     .join('\n');
 
+  const persistedHtmlPreview =
+    env.isProd && params.templateName === 'password_reset'
+      ? html.replace(/(\/reset-password\?token=)[^"&\s<]+/g, '$1[REDACTED]')
+      : html;
+
   if (cfg.gmailUser && cfg.gmailAppPassword) {
     const headers: Record<string, string> = {};
     if (unsubscribeUrl) {
@@ -180,7 +186,7 @@ export async function dispatchEmail(params: {
         jobId: params.jobId || '',
         dedupeKey: params.dedupeKey || '',
         messageId: res.messageId,
-        htmlPreview: html,
+        htmlPreview: persistedHtmlPreview,
       });
       return { status: 'sent', accepted: true, messageId: res.messageId };
     }
@@ -200,7 +206,7 @@ export async function dispatchEmail(params: {
       dedupeKey: params.dedupeKey || '',
       messageId: '',
       error: res.error || 'Gmail SMTP rejected request',
-      htmlPreview: html,
+      htmlPreview: persistedHtmlPreview,
     });
     return { status: 'failed', accepted: false, messageId: '', error: res.error };
   }
@@ -220,7 +226,7 @@ export async function dispatchEmail(params: {
     jobId: params.jobId || '',
     dedupeKey: params.dedupeKey || '',
     messageId: simId,
-    htmlPreview: html,
+    htmlPreview: persistedHtmlPreview,
   });
   return { status: 'simulated', accepted: false, messageId: simId };
 }

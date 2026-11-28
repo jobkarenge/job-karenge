@@ -28,8 +28,8 @@ export interface UserRecord {
   profileImagePublicId: string;
   location: string;
   verificationToken?: string;
-  resetTokenHash?: string;
-  resetTokenExpires?: string;
+  passwordResetTokenHash?: string;
+  passwordResetExpires?: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { Router, type Response } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { env, integrationStatus, resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import {
@@ -13,6 +14,7 @@ import { pushNotification } from '../services/notificationService.ts';
 import { db } from '../store/dataLayer.ts';
 import { sanitizeUser, slugify } from '../utils/sanitize.ts';
 import {
+  generatePasswordResetToken,
   hashToken,
   signAccessToken,
   signEmailVerificationToken,
@@ -22,6 +24,31 @@ import {
 } from '../utils/tokens.ts';
 
 const router = Router();
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many password reset requests. Please try again in 15 minutes.',
+  },
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many password reset attempts. Please try again in 15 minutes.',
+  },
+});
+
+// Isolated development-only inspection cache (never populated or exposed in production)
+const devResetTokenPreviewStore = new Map<string, { resetUrl: string; token: string; expiresAt: string }>();
 
 const REFRESH_COOKIE_NAME = 'jk_refresh_token';
 
@@ -364,95 +391,131 @@ router.post('/verify-email', async (req, res) => {
   }
 });
 
-router.post('/forgot-password', async (req, res) => {
-  const emailParsed = z.string().trim().email().safeParse(req.body?.email);
+router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
+  const emailParsed = z.string().trim().email('Please enter a valid email address.').safeParse(req.body?.email);
   if (!emailParsed.success) {
     return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
   }
   const email = emailParsed.data.toLowerCase();
 
-  if (env.isProd && !integrationStatus.emailConfigured) {
-    console.error('[Auth][ForgotPassword] Cannot send reset email: GMAIL_USER / GMAIL_APP_PASSWORD not configured.');
-    return res.status(503).json({
-      success: false,
-      message: 'Password reset email service is not configured on this server. Please contact support.',
-    });
-  }
+  const genericMessage = integrationStatus.emailConfigured
+    ? 'If an account with that email exists and is verified, password reset instructions have been queued for email delivery.'
+    : 'If an account with that email exists and is verified, a password reset request has been prepared. Email delivery requires SMTP configuration.';
 
   const user = await db.findUserByEmail(email);
-  if (user) {
-    const resetToken = crypto.randomBytes(24).toString('hex');
-    const resetTokenHash = hashToken(resetToken);
-    const resetTokenExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    await db.updateUser(user._id, { resetTokenHash, resetTokenExpires });
-    let emailStatus: 'queued' | 'sent' | 'delivered' | 'simulated' | 'failed' = 'sent';
-    try {
-      const emailResult = await dispatchEmailBounded(
-        sendPasswordResetEmail(user, resetToken, resolveRequestOrigin(req), resolveClientOrigin(req)),
-        22_000
-      );
-      emailStatus = emailResult.status;
-      if (emailResult.status === 'failed' || (env.isProd && emailResult.status === 'queued')) {
-        const failureReason =
-          emailResult.status === 'queued'
-            ? 'SMTP connection timed out while connecting to Gmail from the server.'
-            : emailResult.error || 'Email transport did not accept the message.';
-        console.error(`[Auth][ForgotPassword] Reset email failed for ${email}: ${failureReason}`);
-        return res.status(502).json({
-          success: false,
-          message: `Unable to send password reset email: ${failureReason}`,
-        });
-      }
-      if (env.isProd && emailResult.status === 'simulated') {
-        console.error(`[Auth][ForgotPassword] Reset email simulated in production for ${email}.`);
-        return res.status(503).json({
-          success: false,
-          message: 'Password reset email service is not configured on this server. Please contact support.',
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Email dispatch failed';
-      console.error(`[Auth][ForgotPassword] Unexpected reset email error for ${email}:`, err);
-      return res.status(502).json({
-        success: false,
-        message: `Unable to send password reset email: ${msg}`,
+  if (user && user.emailVerified === true && user.accountStatus !== 'suspended') {
+    const { token: resetToken, tokenHash: passwordResetTokenHash, expiresAt: passwordResetExpires } =
+      generatePasswordResetToken();
+    await db.updateUser(user._id, {
+      passwordResetTokenHash,
+      passwordResetExpires,
+    });
+
+    if (!env.isProd) {
+      const previewBaseUrl = (resolveClientOrigin(req) || resolveRequestOrigin(req) || env.clientUrl).replace(/\/+$/, '');
+      devResetTokenPreviewStore.set(email, {
+        resetUrl: `${previewBaseUrl}/reset-password?token=${encodeURIComponent(resetToken)}`,
+        token: resetToken,
+        expiresAt: passwordResetExpires,
       });
     }
 
-    return res.json({
-      success: true,
-      message: 'If an account matches this email, a reset link has been sent.',
-      emailStatus,
-      resetTokenPreview: env.isProd ? undefined : resetToken,
-    });
+    // Dispatch password reset notification separately from token generation without exposing
+    // account existence, verification status, or plain-text tokens in the API response.
+    try {
+      await dispatchEmailBounded(
+        sendPasswordResetEmail(user, resetToken, resolveRequestOrigin(req), resolveClientOrigin(req)),
+        8000
+      );
+    } catch (err) {
+      console.error(
+        '[Auth][ForgotPassword] Reset notification preparation error:',
+        err instanceof Error ? err.message : 'Unknown error'
+      );
+    }
   }
 
-  res.json({
+  return res.json({
     success: true,
-    message: 'If an account matches this email, a reset link has been sent.',
+    message: genericMessage,
+    smtpConfigured: integrationStatus.emailConfigured,
   });
 });
 
-router.post('/reset-password', async (req, res) => {
-  const schema = z.object({
-    token: z.string().min(10),
-    password: z.string().min(8).max(100),
+// Isolated development-only inspection mechanism for testing reset links without SMTP
+router.get('/dev/reset-token-preview', forgotPasswordLimiter, async (req, res) => {
+  if (env.isProd) {
+    return res.status(404).json({ success: false, message: 'Endpoint not found.' });
+  }
+  const emailParsed = z.string().trim().email('Valid email is required.').safeParse(req.query?.email);
+  if (!emailParsed.success) {
+    return res.status(400).json({ success: false, message: 'Valid email is required.' });
+  }
+  const targetEmail = emailParsed.data.toLowerCase();
+  const preview = devResetTokenPreviewStore.get(targetEmail);
+  if (!preview || new Date(preview.expiresAt).getTime() <= Date.now()) {
+    devResetTokenPreviewStore.delete(targetEmail);
+    return res.status(404).json({
+      success: false,
+      message: 'No development reset link is available for this email yet.',
+    });
+  }
+  return res.json({
+    success: true,
+    data: {
+      resetUrl: preview.resetUrl,
+      token: preview.token,
+    },
   });
+});
+
+router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+  const schema = z
+    .object({
+      token: z.string().trim().min(10, 'Invalid or expired password reset token.'),
+      password: z
+        .string()
+        .min(8, 'Password must be at least 8 characters.')
+        .max(100, 'Password must be at most 100 characters.'),
+      confirmPassword: z.string().min(1, 'Please confirm your new password.'),
+    })
+    .refine((d) => d.password === d.confirmPassword, {
+      message: 'Passwords do not match.',
+      path: ['confirmPassword'],
+    });
+
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) {
-    return res.status(400).json({ success: false, message: parsed.error.issues[0]?.message || 'Invalid reset request' });
+    return res.status(400).json({
+      success: false,
+      message: parsed.error.issues[0]?.message || 'Invalid password reset request.',
+    });
   }
 
   const targetHash = hashToken(parsed.data.token);
   const user = await db.findUserByResetTokenHash(targetHash);
 
-  if (!user) {
-    return res.status(400).json({ success: false, message: 'Invalid or expired password reset token.' });
+  if (!user || !user.emailVerified || user.accountStatus === 'suspended') {
+    return res.status(400).json({
+      success: false,
+      message: 'This password reset link is invalid or has expired.',
+    });
   }
 
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-  await db.updateUser(user._id, { passwordHash, resetTokenHash: '', resetTokenExpires: '' });
-  res.json({ success: true, message: 'Password updated successfully. You can now sign in.' });
+  await db.updateUser(user._id, {
+    passwordHash,
+    passwordResetTokenHash: '',
+    passwordResetExpires: null,
+  });
+  devResetTokenPreviewStore.delete(user.email.toLowerCase());
+  await db.revokeAllRefreshTokensForUser(user._id);
+  clearRefreshCookie(res);
+
+  res.json({
+    success: true,
+    message: 'Password updated successfully. You can now sign in with your new password.',
+  });
 });
 
 router.post('/change-password', requireAuth, async (req: AuthenticatedRequest, res) => {
