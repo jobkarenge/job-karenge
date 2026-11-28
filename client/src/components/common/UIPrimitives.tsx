@@ -24,6 +24,9 @@ export function BrandLogo({ to = '/', compact = false }: { to?: string; compact?
       <img
         src={COMPANY_LOGO_URL}
         alt="Job Karenge logo"
+        width={36}
+        height={36}
+        decoding="async"
         referrerPolicy="no-referrer"
         className="h-9 w-9 rounded-lg object-cover border border-slate-200 dark:border-slate-700 bg-white shrink-0"
       />
@@ -213,3 +216,49 @@ export const PasswordInput = React.forwardRef<HTMLInputElement, PasswordInputPro
 );
 PasswordInput.displayName = 'PasswordInput';
 
+export function PaginationControls({
+  page,
+  totalPages,
+  totalItems,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPageChange: (nextPage: number) => void;
+}) {
+  if (totalPages <= 1) return null;
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(totalItems, page * pageSize);
+
+  return (
+    <div className="px-4 py-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-400">
+      <span className="tabular-nums">
+        Showing {start}–{end} of {totalItems}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="px-3 py-1.5 font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <span className="px-2 tabular-nums">
+          Page {page} of {totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          className="px-3 py-1.5 font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}

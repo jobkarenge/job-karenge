@@ -3,15 +3,11 @@ import { z } from 'zod';
 import { integrationStatus, resolveClientOrigin, resolveRequestOrigin } from '../config/env.ts';
 import { requireAuth, requireRole, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import {
-  fetchBrevoCampaignStatistics,
-} from '../services/brevoService.ts';
-import {
   dispatchEmail,
   getEmailDiagnostics,
   recomputeCampaignStatsFromLogs,
   sendAccountNotificationEmail,
-  syncCandidateContactToBrevo,
-  verifyBrevoAccount,
+  verifyGmailSmtpConnection,
 } from '../services/emailService.ts';
 import { emitUserEvent, pushNotification } from '../services/notificationService.ts';
 import { dispatchCampaignToSubscribedCandidates, handlePublishedJobNotifications } from '../services/schedulerJobs.ts';
@@ -23,50 +19,11 @@ const router = Router();
 router.use(requireAuth, requireRole('admin'));
 
 router.get('/dashboard', async (_req, res) => {
-  const [users, recruiters, companies, jobs, applications, categories, campaigns, messages] = await Promise.all([
-    db.listUsers(),
-    db.listRecruiterProfiles(),
-    db.listCompanies(),
-    db.listJobs(),
-    db.listApplications(),
-    db.listCategories(),
-    db.listEmailCampaigns(),
-    db.listContactMessages(),
-  ]);
-
-  const stats = {
-    totalUsers: users.length,
-    candidates: users.filter((u) => u.role === 'candidate').length,
-    recruiters: users.filter((u) => u.role === 'recruiter').length,
-    pendingRecruiters: recruiters.filter((r) => r.verificationStatus === 'pending').length,
-    companies: companies.length,
-    totalJobs: jobs.length,
-    publishedJobs: jobs.filter((j) => j.status === 'published').length,
-    totalApplications: applications.length,
-    categories: categories.length,
-    campaigns: campaigns.length,
-    unreadMessages: messages.filter((m) => m.status === 'new').length,
-  };
-
-  const categoryBreakdown = categories.map((cat) => ({
-    name: cat.name,
-    jobs: jobs.filter((j) => j.category === cat.name).length,
-  }));
-
-  const applicationStatusBreakdown = [
-    { status: 'Applied', count: applications.filter((a) => a.status === 'Applied').length },
-    { status: 'Shortlisted', count: applications.filter((a) => a.status === 'Shortlisted').length },
-    { status: 'Interview', count: applications.filter((a) => a.status === 'Interview Scheduled').length },
-    { status: 'Selected', count: applications.filter((a) => a.status === 'Selected').length },
-    { status: 'Rejected', count: applications.filter((a) => a.status === 'Rejected').length },
-  ];
-
+  const metrics = await db.getAdminDashboardMetrics();
   res.json({
     success: true,
     data: {
-      stats,
-      categoryBreakdown,
-      applicationStatusBreakdown,
+      ...metrics,
       integrationStatus,
     },
   });
@@ -74,19 +31,17 @@ router.get('/dashboard', async (_req, res) => {
 
 router.get('/users', async (req, res) => {
   const role = String(req.query.role || '');
-  const q = String(req.query.q || '').trim().toLowerCase();
-  let users = await db.listUsers();
-  if (role) users = users.filter((u) => u.role === role);
-  if (q) {
-    users = users.filter((u) => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q));
-  }
-  const recProfiles = await db.listRecruiterProfiles();
+  const q = String(req.query.q || '').trim();
+  const [users, recProfiles] = await Promise.all([
+    db.listUsersSafe({ role: role || undefined, q: q || undefined }),
+    db.listRecruiterProfiles(),
+  ]);
   const recMap = new Map(recProfiles.map((r) => [r.userId, r]));
 
   res.json({
     success: true,
     data: users.map((u) => ({
-      ...sanitizeUser(u),
+      ...u,
       recruiterProfile: recMap.get(u._id) || null,
     })),
   });
@@ -120,10 +75,13 @@ router.patch('/users/:id/status', async (req: AuthenticatedRequest, res) => {
 });
 
 router.get('/recruiters', async (_req, res) => {
-  const [users, recProfiles, companies] = await Promise.all([
-    db.listUsers(),
-    db.listRecruiterProfiles(),
-    db.listCompanies(),
+  const recProfiles = await db.listRecruiterProfiles();
+  if (recProfiles.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+  const [users, companies] = await Promise.all([
+    db.listUsersByIds(recProfiles.map((r) => r.userId)),
+    db.listCompaniesByIds(recProfiles.map((r) => r.companyId)),
   ]);
   const userMap = new Map(users.map((u) => [u._id, sanitizeUser(u)]));
   const compMap = new Map(companies.map((c) => [c._id, c]));
@@ -159,10 +117,7 @@ router.patch('/recruiters/:userId/verification', async (req: AuthenticatedReques
     return res.status(404).json({ success: false, message: 'Recruiter profile not found.' });
   }
 
-  const allCompanies = await db.listCompanies();
-  const ownedCompanies = allCompanies.filter(
-    (c) => String(c.ownerRecruiterId || '') === userId || String(c._id) === String(updated.companyId)
-  );
+  const ownedCompanies = await db.listOwnedCompanies(userId, updated.companyId);
   await Promise.all(
     ownedCompanies.map((c) => db.updateCompany(c._id, { verified: parsed.data.status === 'approved' }))
   );
@@ -227,9 +182,8 @@ router.patch('/companies/:id/verify', async (req: AuthenticatedRequest, res) => 
         verifiedAt: new Date().toISOString(),
       });
     } else {
-      const otherVerified = (await db.listCompanies()).some(
-        (c) => c._id !== updated._id && String(c.ownerRecruiterId || '') === ownerId && c.verified
-      );
+      const owned = await db.listOwnedCompanies(ownerId);
+      const otherVerified = owned.some((c) => c._id !== updated._id && c.verified);
       if (!otherVerified) {
         await db.updateRecruiterProfile(ownerId, {
           verificationStatus: 'rejected',
@@ -280,10 +234,13 @@ router.patch('/jobs/:id/feature', async (req: AuthenticatedRequest, res) => {
 });
 
 router.get('/applications', async (_req, res) => {
-  const [applications, jobs, users] = await Promise.all([
-    db.listApplications(),
-    db.listJobs(),
-    db.listUsers(),
+  const applications = await db.listApplications();
+  if (applications.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+  const [jobs, users] = await Promise.all([
+    db.listJobsByIds(applications.map((a) => a.jobId)),
+    db.listUsersByIds(applications.map((a) => a.candidateId)),
   ]);
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const userMap = new Map(users.map((u) => [u._id, sanitizeUser(u)]));
@@ -377,13 +334,13 @@ router.post('/email-campaigns/:id/send', async (req: AuthenticatedRequest, res) 
     action: 'EMAIL_CAMPAIGN_DISPATCHED',
     targetType: 'EmailCampaign',
     targetId: campaign._id,
-    details: `Dispatched campaign "${campaign.title}" via Brevo to ${sentCount} subscribed candidates`,
+    details: `Dispatched campaign "${campaign.title}" via Gmail SMTP to ${sentCount} subscribed candidates`,
     ipAddress: req.ip || '',
   });
 
   res.json({
     success: true,
-    message: `Campaign processed via Brevo for ${sentCount} subscribed candidate${sentCount === 1 ? '' : 's'}.`,
+    message: `Campaign processed via Gmail SMTP for ${sentCount} subscribed candidate${sentCount === 1 ? '' : 's'}.`,
     data: updated,
   });
 });
@@ -392,53 +349,11 @@ router.post('/email-campaigns/:id/sync-stats', async (req, res) => {
   const campaign = await db.findEmailCampaignById(String(req.params.id));
   if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found.' });
 
-  if (campaign.brevoCampaignId) {
-    const brevoRes = await fetchBrevoCampaignStatistics(campaign.brevoCampaignId);
-    if (brevoRes.ok && brevoRes.stats) {
-      const merged = await db.updateEmailCampaign(campaign._id, {
-        lastStatsSyncAt: new Date().toISOString(),
-        stats: {
-          ...campaign.stats,
-          ...brevoRes.stats,
-        },
-      });
-      return res.json({ success: true, message: 'Campaign statistics synced from Brevo.', data: merged });
-    }
-  }
-
   const updated = await recomputeCampaignStatsFromLogs(campaign._id);
   res.json({
     success: true,
-    message: 'Campaign metrics refreshed from tracked Brevo webhook & dispatch logs.',
+    message: 'Campaign metrics refreshed from Gmail SMTP dispatch logs.',
     data: updated,
-  });
-});
-
-router.post('/email-sync-contacts', async (_req, res) => {
-  const users = await db.listUsers();
-  const candidates = users.filter((u) => u.role === 'candidate' && u.accountStatus === 'active');
-  let synced = 0;
-  let failed = 0;
-  let lastError = '';
-
-  for (const cand of candidates) {
-    const outcome = await syncCandidateContactToBrevo(cand._id);
-    if (outcome.synced) synced++;
-    else {
-      failed++;
-      if (outcome.error) lastError = outcome.error;
-    }
-  }
-
-  res.json({
-    success: synced > 0 || candidates.length === 0,
-    message:
-      candidates.length === 0
-        ? 'No active candidates to synchronize.'
-        : synced > 0
-          ? `Synchronized ${synced} candidate contact${synced === 1 ? '' : 's'} with Brevo (${failed} skipped/failed).`
-          : `Contact sync unavailable: ${lastError || 'Check BREVO_API_KEY configuration.'}`,
-    data: { total: candidates.length, synced, failed },
   });
 });
 
@@ -448,15 +363,15 @@ router.get('/email-logs', async (_req, res) => {
 
 router.get('/email-diagnostics', async (req, res) => {
   const diag = getEmailDiagnostics(resolveRequestOrigin(req), resolveClientOrigin(req));
-  let accountVerification: Awaited<ReturnType<typeof verifyBrevoAccount>> | null = null;
-  if (req.query.verify === 'true' && diag.brevoConfigured) {
-    accountVerification = await verifyBrevoAccount();
+  let smtpVerification: Awaited<ReturnType<typeof verifyGmailSmtpConnection>> | null = null;
+  if (req.query.verify === 'true') {
+    smtpVerification = await verifyGmailSmtpConnection();
   }
   res.json({
     success: true,
     data: {
       ...diag,
-      ...(accountVerification ? { accountVerification } : {}),
+      ...(smtpVerification ? { smtpVerification } : {}),
     },
   });
 });
@@ -484,20 +399,20 @@ router.post('/test-email', async (req: AuthenticatedRequest, res) => {
     userId: recipientUser?._id,
     type: 'transactional',
     templateName: 'admin_test_email',
-    subject: 'Job Karenge — Brevo Transactional Email Test',
-    title: 'Brevo Diagnostic Test',
-    preheader: 'Verification email from Job Karenge Admin via Brevo.',
-    bodyHtml: `<p>This is a live test email dispatched from <strong>Job Karenge</strong> via Brevo using sender <code>${diag.fromEmail}</code>.</p>
-      <p>Note: Initial API acceptance records status as <strong>queued</strong>; actual delivery confirmation updates automatically once Brevo delivery webhooks report delivery.</p>`,
+    subject: 'Job Karenge — Gmail SMTP Transactional Email Test',
+    title: 'Gmail SMTP Diagnostic Test',
+    preheader: 'Verification email from Job Karenge Admin via Gmail SMTP.',
+    bodyHtml: `<p>This is a live test email dispatched from <strong>Job Karenge</strong> via <strong>Gmail SMTP (${diag.smtpHost}:${diag.smtpPort})</strong> using sender <code>${diag.fromEmail}</code>.</p>
+      <p>Your existing Job Karenge branded HTML email layout, typography, and transactional workflows are active and ready.</p>`,
   });
   res.json({
     success: result.status !== 'failed',
     message:
-      result.status === 'queued' || result.status === 'sent'
-        ? `Brevo accepted test email for ${to} (messageId: ${result.messageId}).`
+      result.status === 'sent' || result.status === 'queued'
+        ? `Gmail SMTP accepted test email for ${to} (messageId: ${result.messageId}).`
         : result.status === 'simulated'
-          ? `BREVO_API_KEY not configured; logged preview for ${to}.`
-          : `Brevo failed: ${result.error || 'Unknown error'}`,
+          ? `GMAIL_USER / GMAIL_APP_PASSWORD not configured; logged preview for ${to}.`
+          : `Gmail SMTP failed: ${result.error || 'Unknown error'}`,
     data: result,
   });
 });
@@ -540,14 +455,14 @@ router.put('/settings', async (req: AuthenticatedRequest, res) => {
     promotionalDigestEnabled: z.boolean().optional(),
     supportEmail: z.string().trim().email().optional(),
     maxPdfSizeBytes: z.number().int().min(100_000).max(5_242_880).optional(),
-    brevoSenderEmail: z
+    emailFromEmail: z
       .string()
       .trim()
       .refine((v) => v === '' || z.string().email().safeParse(v).success, {
-        message: 'Brevo Sender Email must be empty (to use server env) or a valid email address.',
+        message: 'Sender Email must be empty (to use server env) or a valid email address.',
       })
       .optional(),
-    brevoSenderName: z.string().trim().max(100).optional(),
+    emailFromName: z.string().trim().max(100).optional(),
     clientUrl: z
       .string()
       .trim()

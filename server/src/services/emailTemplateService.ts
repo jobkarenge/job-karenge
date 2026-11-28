@@ -48,6 +48,21 @@ export function verifyUnsubscribeToken(token: string): { userId: string; email: 
   }
 }
 
+export function sanitizeEmailUrl(url?: string): string {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '#';
+  if (trimmed.startsWith('/')) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'mailto:') {
+      return trimmed;
+    }
+  } catch {
+    return '#';
+  }
+  return '#';
+}
+
 export function renderBrandedEmail(params: {
   title: string;
   preheader: string;
@@ -57,24 +72,29 @@ export function renderBrandedEmail(params: {
   unsubscribeUrl?: string;
   preferencesUrl?: string;
 }): string {
+  const safeCtaUrl = params.ctaUrl ? sanitizeEmailUrl(params.ctaUrl) : '';
+  const safeUnsubscribeUrl = params.unsubscribeUrl ? sanitizeEmailUrl(params.unsubscribeUrl) : '';
+  const safePreferencesUrl = params.preferencesUrl ? sanitizeEmailUrl(params.preferencesUrl) : '';
+
   const ctaBlock =
-    params.ctaLabel && params.ctaUrl
+    params.ctaLabel && safeCtaUrl && safeCtaUrl !== '#'
       ? `<div style="margin:28px 0;">
-          <a href="${escapeHtml(params.ctaUrl)}" style="display:inline-block;background:#102A43;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;border-radius:8px;">
+          <a href="${escapeHtml(safeCtaUrl)}" style="display:inline-block;background:#102A43;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;border-radius:8px;">
             ${escapeHtml(params.ctaLabel)}
           </a>
         </div>`
       : '';
 
-  const unsubscribeBlock = params.unsubscribeUrl
-    ? `<p style="margin:12px 0 0;font-size:12px;color:#64748b;">
-        Don&apos;t want promotional job alerts? <a href="${escapeHtml(params.unsubscribeUrl)}" style="color:#2563EB;text-decoration:underline;">Unsubscribe from promotional emails</a>${
-          params.preferencesUrl
-            ? ` &middot; <a href="${escapeHtml(params.preferencesUrl)}" style="color:#2563EB;text-decoration:underline;">Manage Email Preferences</a>`
+  const unsubscribeBlock =
+    safeUnsubscribeUrl && safeUnsubscribeUrl !== '#'
+      ? `<p style="margin:12px 0 0;font-size:12px;color:#64748b;">
+        Don&apos;t want promotional job alerts? <a href="${escapeHtml(safeUnsubscribeUrl)}" style="color:#2563EB;text-decoration:underline;">Unsubscribe from promotional emails</a>${
+          safePreferencesUrl && safePreferencesUrl !== '#'
+            ? ` &middot; <a href="${escapeHtml(safePreferencesUrl)}" style="color:#2563EB;text-decoration:underline;">Manage Email Preferences</a>`
             : ''
         }.
       </p>`
-    : `<p style="margin:12px 0 0;font-size:12px;color:#64748b;">
+      : `<p style="margin:12px 0 0;font-size:12px;color:#64748b;">
         This is an essential transactional notification from Job Karenge.
       </p>`;
 

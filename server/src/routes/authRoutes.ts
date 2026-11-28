@@ -399,13 +399,7 @@ router.post('/reset-password', async (req, res) => {
   }
 
   const targetHash = hashToken(parsed.data.token);
-  const users = await db.listUsers();
-  const user = users.find(
-    (u) =>
-      u.resetTokenHash === targetHash &&
-      u.resetTokenExpires &&
-      new Date(u.resetTokenExpires).getTime() > Date.now()
-  );
+  const user = await db.findUserByResetTokenHash(targetHash);
 
   if (!user) {
     return res.status(400).json({ success: false, message: 'Invalid or expired password reset token.' });

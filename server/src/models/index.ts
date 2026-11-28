@@ -3,25 +3,27 @@ import mongoose, { Schema } from 'mongoose';
 const userSchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true, index: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     phone: { type: String, default: '' },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ['candidate', 'recruiter', 'admin'], required: true, index: true },
+    role: { type: String, enum: ['candidate', 'recruiter', 'admin'], required: true },
     emailVerified: { type: Boolean, default: false },
     accountStatus: { type: String, enum: ['active', 'pending', 'suspended'], default: 'active', index: true },
     profileImage: { type: String, default: '' },
     profileImagePublicId: { type: String, default: '' },
     location: { type: String, default: '' },
     verificationToken: { type: String, default: '' },
-    resetTokenHash: { type: String, default: '' },
+    resetTokenHash: { type: String, default: '', index: true },
     resetTokenExpires: { type: Date },
   },
   { timestamps: true }
 );
 
+userSchema.index({ role: 1, accountStatus: 1, createdAt: -1 });
+
 const candidateProfileSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     headline: { type: String, default: '' },
     designation: { type: String, default: '' },
     objective: { type: String, default: '' },
@@ -83,7 +85,7 @@ const candidateProfileSchema = new Schema(
 const companySchema = new Schema(
   {
     name: { type: String, required: true, trim: true },
-    slug: { type: String, required: true, unique: true, index: true },
+    slug: { type: String, required: true, unique: true },
     logoUrl: { type: String, default: '' },
     logoPublicId: { type: String, default: '' },
     bannerUrl: { type: String, default: '' },
@@ -105,9 +107,12 @@ const companySchema = new Schema(
   { timestamps: true }
 );
 
+companySchema.index({ ownerRecruiterId: 1, createdAt: -1 });
+companySchema.index({ verified: 1, createdAt: -1 });
+
 const recruiterProfileSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     companyId: { type: Schema.Types.ObjectId, ref: 'Company' },
     companyName: { type: String, required: true },
     designation: { type: String, required: true },
@@ -121,11 +126,11 @@ const recruiterProfileSchema = new Schema(
 
 const jobSchema = new Schema(
   {
-    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
     companyName: { type: String, required: true },
     title: { type: String, required: true, trim: true, index: true },
-    slug: { type: String, required: true, unique: true, index: true },
+    slug: { type: String, required: true, unique: true },
     category: { type: String, required: true, index: true },
     description: { type: String, required: true },
     applicationDeadline: { type: Date, required: false, default: null, index: true },
@@ -148,9 +153,9 @@ const jobSchema = new Schema(
     contactEmail: { type: String, default: '' },
     contactPhone: { type: String, default: '' },
     applicationInstructions: { type: String, default: '' },
-    status: { type: String, enum: ['draft', 'published', 'scheduled', 'closed', 'expired'], default: 'published', index: true },
+    status: { type: String, enum: ['draft', 'published', 'scheduled', 'closed', 'expired'], default: 'published' },
     scheduledFor: { type: Date },
-    featured: { type: Boolean, default: false, index: true },
+    featured: { type: Boolean, default: false },
     allowDirectApply: { type: Boolean, default: true },
     viewsCount: { type: Number, default: 0 },
     applicationsCount: { type: Number, default: 0 },
@@ -160,12 +165,16 @@ const jobSchema = new Schema(
 );
 
 jobSchema.index({ status: 1, category: 1, location: 1, workMode: 1 });
+jobSchema.index({ status: 1, publishedAt: -1, createdAt: -1 });
+jobSchema.index({ status: 1, featured: -1, viewsCount: -1 });
+jobSchema.index({ recruiterId: 1, createdAt: -1 });
+jobSchema.index({ companyId: 1, status: 1 });
 
 const applicationSchema = new Schema(
   {
-    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true, index: true },
-    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true },
+    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true },
     resumeUrl: { type: String, required: true },
     resumePublicId: { type: String, default: '' },
@@ -194,10 +203,15 @@ const applicationSchema = new Schema(
 );
 
 applicationSchema.index({ candidateId: 1, jobId: 1 }, { unique: true });
+applicationSchema.index({ candidateId: 1, appliedAt: -1 });
+applicationSchema.index({ recruiterId: 1, appliedAt: -1 });
+applicationSchema.index({ recruiterId: 1, status: 1 });
+applicationSchema.index({ recruiterId: 1, resumePublicId: 1 });
+applicationSchema.index({ jobId: 1, status: 1 });
 
 const savedJobSchema = new Schema(
   {
-    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true, index: true },
   },
   { timestamps: true }
@@ -209,8 +223,8 @@ const interviewSchema = new Schema(
   {
     applicationId: { type: Schema.Types.ObjectId, ref: 'Application', required: true, index: true },
     jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true },
-    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    candidateId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    recruiterId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     date: { type: String, required: true },
     time: { type: String, required: true },
     timezone: { type: String, default: 'Asia/Kolkata' },
@@ -226,21 +240,27 @@ const interviewSchema = new Schema(
   { timestamps: true }
 );
 
+interviewSchema.index({ candidateId: 1, date: 1, time: 1 });
+interviewSchema.index({ recruiterId: 1, date: 1, time: 1 });
+
 const notificationSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     type: { type: String, required: true },
     title: { type: String, required: true },
     message: { type: String, required: true },
     link: { type: String, default: '' },
-    read: { type: Boolean, default: false, index: true },
+    read: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
+notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, read: 1 });
+
 const emailPreferenceSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     dailyJobAlerts: { type: Boolean, default: false },
     weeklyJobAlerts: { type: Boolean, default: true },
     newJobNotifications: { type: Boolean, default: true },
@@ -293,11 +313,12 @@ const emailLogSchema = new Schema(
     templateName: { type: String, required: true },
     subject: { type: String, required: true },
     status: { type: String, enum: ['queued', 'sent', 'delivered', 'bounced', 'simulated', 'failed'], default: 'queued' },
-    provider: { type: String, enum: ['brevo'], default: 'brevo' },
+    provider: { type: String, enum: ['gmail_smtp', 'brevo'], default: 'gmail_smtp' },
+    smtpEvent: { type: String, default: '' },
     brevoEvent: { type: String, default: '' },
     campaignId: { type: String, default: '', index: true },
     jobId: { type: String, default: '', index: true },
-    dedupeKey: { type: String, default: '', index: true },
+    dedupeKey: { type: String, default: '' },
     deliveredAt: { type: Date },
     messageId: { type: String, default: '', index: true },
     error: { type: String, default: '' },
@@ -305,6 +326,9 @@ const emailLogSchema = new Schema(
   },
   { timestamps: true }
 );
+
+emailLogSchema.index({ createdAt: -1 });
+emailLogSchema.index({ dedupeKey: 1, status: 1 });
 
 const jobCategorySchema = new Schema(
   {
@@ -315,6 +339,8 @@ const jobCategorySchema = new Schema(
   },
   { timestamps: true }
 );
+
+jobCategorySchema.index({ active: 1, name: 1 });
 
 const contactMessageSchema = new Schema(
   {
@@ -341,6 +367,8 @@ const auditLogSchema = new Schema(
   { timestamps: true }
 );
 
+auditLogSchema.index({ createdAt: -1 });
+
 const refreshTokenSchema = new Schema(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -351,6 +379,8 @@ const refreshTokenSchema = new Schema(
   { timestamps: true }
 );
 
+refreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
 const platformSettingSchema = new Schema(
   {
     key: { type: String, required: true, unique: true, default: 'global' },
@@ -359,6 +389,8 @@ const platformSettingSchema = new Schema(
     maxPdfSizeBytes: { type: Number, default: 1024 * 1024 },
     promotionalDigestEnabled: { type: Boolean, default: true },
     supportEmail: { type: String, default: 'support@jobkarenge.com' },
+    emailFromEmail: { type: String, default: '' },
+    emailFromName: { type: String, default: '' },
     brevoSenderEmail: { type: String, default: '' },
     brevoSenderName: { type: String, default: '' },
     clientUrl: { type: String, default: '' },

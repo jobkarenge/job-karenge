@@ -38,7 +38,7 @@ export function RecruiterInterviewsPage() {
       const { emailStatus, emailError } = res.data || {};
       if (emailStatus === 'failed') {
         toast.warning(
-          `Interview rescheduled & candidate notified in-app, but email failed: ${emailError || 'Check Brevo sender configuration.'}`
+          `Interview rescheduled & candidate notified in-app, but email failed: ${emailError || 'Check Gmail SMTP sender configuration.'}`
         );
       } else {
         toast.success('Interview rescheduled & candidate notified.');
@@ -57,7 +57,7 @@ export function RecruiterInterviewsPage() {
       const { emailStatus, emailError } = res.data || {};
       if (emailStatus === 'failed') {
         toast.warning(
-          `Interview cancelled & candidate notified in-app, but email failed: ${emailError || 'Check Brevo configuration.'}`
+          `Interview cancelled & candidate notified in-app, but email failed: ${emailError || 'Check Gmail SMTP configuration.'}`
         );
       } else {
         toast.success('Interview cancelled & candidate notified.');

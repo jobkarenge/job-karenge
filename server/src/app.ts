@@ -1,3 +1,4 @@
+import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
@@ -19,6 +20,14 @@ import { stripNoSqlOperators } from './utils/sanitize.ts';
 export function createExpressApp() {
   const app = express();
   app.set('trust proxy', 1);
+  app.set('etag', 'strong');
+
+  app.use(
+    compression({
+      threshold: 1024,
+      level: 6,
+    })
+  );
 
   app.use(
     helmet({
@@ -29,18 +38,34 @@ export function createExpressApp() {
   );
 
   const allowedOrigins = new Set(
-    [env.clientUrl, env.serverUrl, 'http://localhost:3000'].filter(Boolean)
+    [
+      ...env.clientUrl.split(',').map((s) => s.trim()),
+      env.serverUrl,
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+    ].filter(Boolean)
   );
+
+  const isOriginAllowed = (origin?: string): boolean => {
+    if (!origin) return true;
+    if (allowedOrigins.has(origin)) return true;
+    try {
+      const host = new URL(origin).hostname;
+      return (
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host.endsWith('.run.app') ||
+        host.endsWith('.netlify.app') ||
+        host.endsWith('.onrender.com')
+      );
+    } catch {
+      return false;
+    }
+  };
 
   app.use(
     cors({
-      origin: (origin, cb) => {
-        if (!origin) return cb(null, true);
-        if (allowedOrigins.has(origin) || origin.endsWith('.run.app') || origin.includes('localhost')) {
-          return cb(null, true);
-        }
-        return cb(null, true);
-      },
+      origin: (origin, cb) => cb(null, isOriginAllowed(origin)),
       credentials: true,
     })
   );
@@ -72,18 +97,33 @@ export function createExpressApp() {
     legacyHeaders: false,
   });
 
+  const noStore = (_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+  };
+
+  app.use('/api', (req, res, next) => {
+    req.setTimeout(30_000);
+    res.setTimeout(30_000, () => {
+      if (!res.headersSent) {
+        res.status(504).json({ success: false, message: 'Request timed out. Please try again.' });
+      }
+    });
+    next();
+  });
+
   app.use('/api', apiLimiter);
-  app.use('/api/auth', authLimiter, authRoutes);
+  app.use('/api/auth', noStore, authLimiter, authRoutes);
   app.use('/api/jobs', jobRoutes);
-  app.use('/api/candidate', candidateRoutes);
-  app.use('/api/applications', applicationRoutes);
-  app.use('/api/recruiter/applications', recruiterAppRouter);
-  app.use('/api/recruiter', recruiterRoutes);
-  app.use('/api/interviews', interviewRoutes);
-  app.use('/api/notifications', notificationRouter);
-  app.use('/api/email', emailRouter);
+  app.use('/api/candidate', noStore, candidateRoutes);
+  app.use('/api/applications', noStore, applicationRoutes);
+  app.use('/api/recruiter/applications', noStore, recruiterAppRouter);
+  app.use('/api/recruiter', noStore, recruiterRoutes);
+  app.use('/api/interviews', noStore, interviewRoutes);
+  app.use('/api/notifications', noStore, notificationRouter);
+  app.use('/api/email', noStore, emailRouter);
   app.use('/api/files', filesRouter);
-  app.use('/api/admin', adminRoutes);
+  app.use('/api/admin', noStore, adminRoutes);
 
   // Public contact & newsletter endpoints
   app.post('/api/contact', async (req, res) => {
@@ -123,6 +163,7 @@ export function createExpressApp() {
         return '';
       }
     };
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
     res.json({
       success: true,
       data: {
@@ -153,6 +194,7 @@ export function createExpressApp() {
   app.get('/robots.txt', (req, res) => {
     const fallbackUrl = hasExplicitServerUrlEnv ? env.serverUrl : resolveRequestOrigin(req) || env.serverUrl;
     const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || fallbackUrl).replace(/\/+$/, '');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     res.type('text/plain').send(
       `User-agent: *\nAllow: /\nDisallow: /candidate/\nDisallow: /recruiter/\nDisallow: /admin/\nSitemap: ${activeServerUrl}/sitemap.xml\n`
     );
@@ -161,7 +203,7 @@ export function createExpressApp() {
   app.get('/sitemap.xml', async (req, res) => {
     const fallbackUrl = hasExplicitServerUrlEnv ? env.serverUrl : resolveRequestOrigin(req) || env.serverUrl;
     const activeServerUrl = (db.getPlatformSettings().serverUrl?.trim() || fallbackUrl).replace(/\/+$/, '');
-    const jobs = (await db.listJobs()).filter((j) => j.status === 'published');
+    const jobs = await db.listJobsForSitemap();
     const urls = [
       `${activeServerUrl}/`,
       `${activeServerUrl}/jobs`,
@@ -173,6 +215,7 @@ export function createExpressApp() {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
       .map((u) => `  <url><loc>${u}</loc></url>`)
       .join('\n')}\n</urlset>`;
+    res.setHeader('Cache-Control', 'public, max-age=300');
     res.type('application/xml').send(xml);
   });
 

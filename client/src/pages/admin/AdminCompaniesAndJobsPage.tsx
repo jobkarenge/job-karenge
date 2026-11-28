@@ -1,8 +1,8 @@
 import { Trash2 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
-import { api, getApiErrorMessage } from '../../services/api';
+import { PaginationControls, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
+import { api, getApiErrorMessage, invalidateCategoriesCache, invalidateCompaniesCache } from '../../services/api';
 import type { Company, Job } from '../../types';
 
 interface CategoryRow {
@@ -17,6 +17,9 @@ export function AdminCompaniesAndJobsPage() {
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [newCat, setNewCat] = useState({ name: '', description: '' });
   const [loading, setLoading] = useState(true);
+  const [companyPage, setCompanyPage] = useState(1);
+  const [jobPage, setJobPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const load = () => {
     setLoading(true);
@@ -35,6 +38,7 @@ export function AdminCompaniesAndJobsPage() {
 
   const toggleCompanyVerify = async (c: Company) => {
     await api.patch(`/admin/companies/${c._id}/verify`, { verified: !c.verified });
+    invalidateCompaniesCache();
     toast.success('Company verification updated.');
     load();
   };
@@ -55,6 +59,7 @@ export function AdminCompaniesAndJobsPage() {
     e.preventDefault();
     try {
       await api.post('/admin/categories', newCat);
+      invalidateCategoriesCache();
       setNewCat({ name: '', description: '' });
       toast.success('Category added.');
       load();
@@ -64,6 +69,14 @@ export function AdminCompaniesAndJobsPage() {
   };
 
   if (loading) return <SkeletonList rows={4} />;
+
+  const companyTotalPages = Math.max(1, Math.ceil(companies.length / PAGE_SIZE));
+  const safeCompanyPage = Math.min(companyPage, companyTotalPages);
+  const pagedCompanies = companies.slice((safeCompanyPage - 1) * PAGE_SIZE, safeCompanyPage * PAGE_SIZE);
+
+  const jobTotalPages = Math.max(1, Math.ceil(jobs.length / PAGE_SIZE));
+  const safeJobPage = Math.min(jobPage, jobTotalPages);
+  const pagedJobs = jobs.slice((safeJobPage - 1) * PAGE_SIZE, safeJobPage * PAGE_SIZE);
 
   return (
     <div className="space-y-8">
@@ -109,6 +122,7 @@ export function AdminCompaniesAndJobsPage() {
                 type="button"
                 onClick={async () => {
                   await api.delete(`/admin/categories/${cat._id}`);
+                  invalidateCategoriesCache();
                   load();
                 }}
                 className="text-slate-400 hover:text-rose-600"
@@ -135,7 +149,7 @@ export function AdminCompaniesAndJobsPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {companies.map((c) => (
+            {pagedCompanies.map((c) => (
               <tr key={c._id}>
                 <td className="py-3 px-4 font-semibold">{c.name}</td>
                 <td className="py-3 px-4 text-xs text-slate-500">{c.industry} · {c.headquarters}</td>
@@ -155,6 +169,13 @@ export function AdminCompaniesAndJobsPage() {
             ))}
           </tbody>
         </table>
+        <PaginationControls
+          page={safeCompanyPage}
+          totalPages={companyTotalPages}
+          totalItems={companies.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={setCompanyPage}
+        />
       </section>
 
       {/* Jobs */}
@@ -172,7 +193,7 @@ export function AdminCompaniesAndJobsPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {jobs.map((j) => (
+            {pagedJobs.map((j) => (
               <tr key={j._id}>
                 <td className="py-3 px-4 font-semibold">{j.title}</td>
                 <td className="py-3 px-4 text-xs text-slate-500">{j.companyName}</td>
@@ -199,6 +220,13 @@ export function AdminCompaniesAndJobsPage() {
             ))}
           </tbody>
         </table>
+        <PaginationControls
+          page={safeJobPage}
+          totalPages={jobTotalPages}
+          totalItems={jobs.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={setJobPage}
+        />
       </section>
     </div>
   );

@@ -14,6 +14,31 @@ export default defineConfig(() => {
     build: {
       outDir,
       emptyOutDir: true,
+      target: 'es2020',
+      cssCodeSplit: true,
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (
+              id.includes('/react-dom/') ||
+              id.includes('/react/') ||
+              id.includes('/react-is/') ||
+              id.includes('/scheduler/') ||
+              id.includes('/react-router')
+            ) {
+              return 'react-vendor';
+            }
+            if (id.includes('/axios/')) {
+              return 'http-vendor';
+            }
+            if (id.includes('/lucide-react/') || id.includes('/sonner/')) {
+              return 'ui-vendor';
+            }
+          },
+        },
+      },
     },
     plugins: [
       react(),
@@ -36,9 +61,28 @@ export default defineConfig(() => {
       },
     ],
     resolve: {
+      dedupe: ['react', 'react-dom', 'react-is', 'react-router-dom'],
       alias: {
         '@': clientRoot,
       },
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        'react-router-dom',
+        'recharts',
+        'lucide-react',
+        'sonner',
+        'axios',
+        'react-hook-form',
+        '@hookform/resolvers/zod',
+        'zod',
+        'socket.io-client',
+      ],
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

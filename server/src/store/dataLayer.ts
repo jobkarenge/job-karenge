@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { isMongoConnected } from '../config/db.ts';
 import { Models } from '../models/index.ts';
+import { appCache } from '../services/cacheService.ts';
 import type {
   ApplicationRecord,
   AuditLogRecord,
@@ -54,6 +55,65 @@ export function newId(): string {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+const JOB_LIST_OMIT =
+  '-responsibilities -requiredQualifications -preferredQualifications -benefits -applicationInstructions -contactPerson -contactEmail -contactPhone';
+const USER_SAFE_OMIT = '-passwordHash -verificationToken -resetTokenHash -resetTokenExpires';
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isObjectIdLike(id: string): boolean {
+  return /^[a-f0-9]{24}$/i.test(id);
+}
+
+function buildActiveJobMongoFilter(now = new Date()): Record<string, unknown> {
+  return {
+    status: 'published',
+    $or: [
+      { applicationDeadline: null },
+      { applicationDeadline: { $exists: false } },
+      { applicationDeadline: { $gte: now } },
+    ],
+  };
+}
+
+function mapJobDoc(d: Record<string, unknown>): JobRecord {
+  return {
+    ...(d as unknown as JobRecord),
+    _id: String(d._id),
+    recruiterId: String(d.recruiterId),
+    companyId: String(d.companyId),
+    skills: Array.isArray(d.skills) ? (d.skills as string[]) : [],
+    responsibilities: Array.isArray(d.responsibilities) ? (d.responsibilities as string[]) : [],
+    requiredQualifications: Array.isArray(d.requiredQualifications) ? (d.requiredQualifications as string[]) : [],
+    preferredQualifications: Array.isArray(d.preferredQualifications) ? (d.preferredQualifications as string[]) : [],
+    benefits: Array.isArray(d.benefits) ? (d.benefits as string[]) : [],
+    applicationDeadline: d.applicationDeadline ? new Date(String(d.applicationDeadline)).toISOString() : null,
+    createdAt: new Date(String(d.createdAt || nowIso())).toISOString(),
+    updatedAt: new Date(String(d.updatedAt || nowIso())).toISOString(),
+  };
+}
+
+function mapCompanyDoc(d: Record<string, unknown>): CompanyRecord {
+  return {
+    ...(d as unknown as CompanyRecord),
+    _id: String(d._id),
+    ...(d.ownerRecruiterId ? { ownerRecruiterId: String(d.ownerRecruiterId) } : { ownerRecruiterId: undefined }),
+  };
+}
+
+function mapAppDoc(d: Record<string, unknown>): ApplicationRecord {
+  return {
+    ...(d as unknown as ApplicationRecord),
+    _id: String(d._id),
+    candidateId: String(d.candidateId),
+    jobId: String(d.jobId),
+    recruiterId: String(d.recruiterId),
+    companyId: String(d.companyId),
+  };
 }
 
 function futureIso(days: number): string {
@@ -119,8 +179,8 @@ function createInitialSeed(): StoreState {
       maxPdfSizeBytes: 1024 * 1024,
       promotionalDigestEnabled: true,
       supportEmail: 'support@jobkarenge.com',
-      brevoSenderEmail: '',
-      brevoSenderName: '',
+      emailFromEmail: '',
+      emailFromName: '',
       clientUrl: '',
       serverUrl: '',
       socialLinks: {
@@ -283,8 +343,8 @@ export async function ensureSeededDatabase(): Promise<void> {
       maxPdfSizeBytes: settingsDoc.maxPdfSizeBytes ?? defaults.maxPdfSizeBytes,
       promotionalDigestEnabled: settingsDoc.promotionalDigestEnabled ?? defaults.promotionalDigestEnabled,
       supportEmail: settingsDoc.supportEmail || defaults.supportEmail,
-      brevoSenderEmail: settingsDoc.brevoSenderEmail || '',
-      brevoSenderName: settingsDoc.brevoSenderName || '',
+      emailFromEmail: settingsDoc.emailFromEmail || settingsDoc.brevoSenderEmail || '',
+      emailFromName: settingsDoc.emailFromName || settingsDoc.brevoSenderName || '',
       clientUrl: settingsDoc.clientUrl || '',
       serverUrl: settingsDoc.serverUrl || '',
       socialLinks: {
@@ -357,6 +417,7 @@ export const db = {
   },
 
   async createUser(data: Omit<UserRecord, '_id' | 'createdAt' | 'updatedAt'>): Promise<UserRecord> {
+    appCache.invalidatePrefix('public:stats');
     if (isMongoConnected()) {
       const created = await Models.User.create(data);
       return { ...(created.toObject() as unknown as UserRecord), _id: String(created._id) };
@@ -539,6 +600,7 @@ export const db = {
   },
 
   async createCompany(data: Omit<CompanyRecord, '_id' | 'createdAt' | 'updatedAt'>): Promise<CompanyRecord> {
+    appCache.invalidateAllPublic();
     if (isMongoConnected()) {
       const created = await Models.Company.create(data);
       const obj = created.toObject();
@@ -558,6 +620,7 @@ export const db = {
   },
 
   async updateCompany(id: string, patch: Partial<CompanyRecord>): Promise<CompanyRecord | null> {
+    appCache.invalidateAllPublic();
     if (isMongoConnected()) {
       const doc = await Models.Company.findByIdAndUpdate(id, patch, { new: true }).lean();
       return doc
@@ -597,23 +660,16 @@ export const db = {
 
   async findJobById(id: string): Promise<JobRecord | null> {
     if (isMongoConnected()) {
-      const doc = await Models.Job.findById(id).lean();
-      return doc
-        ? {
-            ...(doc as unknown as JobRecord),
-            _id: String(doc._id),
-            recruiterId: String(doc.recruiterId),
-            companyId: String(doc.companyId),
-            applicationDeadline: doc.applicationDeadline ? new Date(doc.applicationDeadline).toISOString() : null,
-            createdAt: new Date(doc.createdAt).toISOString(),
-            updatedAt: new Date(doc.updatedAt).toISOString(),
-          }
-        : null;
+      const doc = isObjectIdLike(id)
+        ? await Models.Job.findById(id).lean()
+        : await Models.Job.findOne({ slug: id }).lean();
+      return doc ? mapJobDoc(doc as unknown as Record<string, unknown>) : null;
     }
     return this.getState().jobs.find((j) => j._id === id || j.slug === id) || null;
   },
 
   async createJob(data: Omit<JobRecord, '_id' | 'createdAt' | 'updatedAt'>): Promise<JobRecord> {
+    appCache.invalidateAllPublic();
     if (isMongoConnected()) {
       const created = await Models.Job.create(data);
       const obj = created.toObject();
@@ -635,6 +691,7 @@ export const db = {
   },
 
   async updateJob(id: string, patch: Partial<JobRecord>): Promise<JobRecord | null> {
+    appCache.invalidateAllPublic();
     if (isMongoConnected()) {
       const doc = await Models.Job.findByIdAndUpdate(id, patch, { new: true }).lean();
       return doc
@@ -658,6 +715,7 @@ export const db = {
   },
 
   async deleteJob(id: string): Promise<boolean> {
+    appCache.invalidateAllPublic();
     if (isMongoConnected()) {
       const res = await Models.Job.findByIdAndDelete(id);
       return Boolean(res);
@@ -672,15 +730,8 @@ export const db = {
   // Applications
   async listApplications(): Promise<ApplicationRecord[]> {
     if (isMongoConnected()) {
-      const docs = await Models.Application.find().sort({ appliedAt: -1 }).lean();
-      return docs.map((d) => ({
-        ...(d as unknown as ApplicationRecord),
-        _id: String(d._id),
-        candidateId: String(d.candidateId),
-        jobId: String(d.jobId),
-        recruiterId: String(d.recruiterId),
-        companyId: String(d.companyId),
-      }));
+      const docs = await Models.Application.find().sort({ appliedAt: -1 }).maxTimeMS(15000).lean();
+      return docs.map((d) => mapAppDoc(d as unknown as Record<string, unknown>));
     }
     return [...this.getState().applications];
   },
@@ -711,6 +762,7 @@ export const db = {
   },
 
   async createApplication(data: Omit<ApplicationRecord, '_id' | 'updatedAt'>): Promise<ApplicationRecord> {
+    appCache.invalidatePrefix('public:stats');
     if (isMongoConnected()) {
       const created = await Models.Application.create(data);
       const obj = created.toObject();
@@ -1000,14 +1052,6 @@ export const db = {
     return this.getState().emailCampaigns.find((c) => c._id === id) || null;
   },
 
-  async findEmailCampaignByBrevoId(brevoCampaignId: number): Promise<EmailCampaignRecord | null> {
-    if (isMongoConnected()) {
-      const doc = await Models.EmailCampaign.findOne({ brevoCampaignId }).lean();
-      return doc ? { ...(doc as unknown as EmailCampaignRecord), _id: String(doc._id) } : null;
-    }
-    return this.getState().emailCampaigns.find((c) => c.brevoCampaignId === brevoCampaignId) || null;
-  },
-
   async createEmailCampaign(data: Omit<EmailCampaignRecord, '_id' | 'createdAt' | 'updatedAt'>): Promise<EmailCampaignRecord> {
     if (isMongoConnected()) {
       const created = await Models.EmailCampaign.create(data);
@@ -1079,16 +1123,16 @@ export const db = {
 
   async listEmailLogs(limit = 100): Promise<EmailLogRecord[]> {
     if (isMongoConnected()) {
-      const docs = await Models.EmailLog.find().sort({ createdAt: -1 }).limit(limit).lean();
-      return docs.map((d) => ({ ...(d as unknown as EmailLogRecord), _id: String(d._id) }));
+      const docs = await Models.EmailLog.find().sort({ createdAt: -1 }).limit(limit).select('-htmlPreview').maxTimeMS(15000).lean();
+      return docs.map((d) => ({ ...(d as unknown as EmailLogRecord), _id: String(d._id), htmlPreview: '' }));
     }
-    return this.getState().emailLogs.slice(0, limit);
+    return this.getState().emailLogs.slice(0, limit).map((l) => ({ ...l, htmlPreview: '' }));
   },
 
   async listEmailLogsByCampaign(campaignId: string): Promise<EmailLogRecord[]> {
     if (isMongoConnected()) {
-      const docs = await Models.EmailLog.find({ campaignId }).lean();
-      return docs.map((d) => ({ ...(d as unknown as EmailLogRecord), _id: String(d._id) }));
+      const docs = await Models.EmailLog.find({ campaignId }).select('-htmlPreview').lean();
+      return docs.map((d) => ({ ...(d as unknown as EmailLogRecord), _id: String(d._id), htmlPreview: '' }));
     }
     return this.getState().emailLogs.filter((l) => l.campaignId === campaignId);
   },
@@ -1103,6 +1147,8 @@ export const db = {
   },
 
   async createCategory(data: Omit<JobCategoryRecord, '_id' | 'createdAt'>): Promise<JobCategoryRecord> {
+    appCache.invalidatePrefix('public:categories');
+    appCache.invalidatePrefix('public:home');
     const cleanName = data.name.trim();
     const cleanSlug = data.slug.trim().toLowerCase();
     const existing = (await this.listCategories()).find(
@@ -1123,6 +1169,8 @@ export const db = {
   },
 
   async deleteCategory(id: string): Promise<boolean> {
+    appCache.invalidatePrefix('public:categories');
+    appCache.invalidatePrefix('public:home');
     if (isMongoConnected()) {
       const res = await Models.JobCategory.findByIdAndDelete(id);
       return Boolean(res);
@@ -1193,7 +1241,7 @@ export const db = {
 
   async listAuditLogs(limit = 100): Promise<AuditLogRecord[]> {
     if (isMongoConnected()) {
-      const docs = await Models.AuditLog.find().sort({ createdAt: -1 }).limit(limit).lean();
+      const docs = await Models.AuditLog.find().sort({ createdAt: -1 }).limit(limit).maxTimeMS(15000).lean();
       return docs.map((d) => ({ ...(d as unknown as AuditLogRecord), _id: String(d._id) }));
     }
     return this.getState().auditLogs.slice(0, limit);
@@ -1256,6 +1304,7 @@ export const db = {
   },
 
   async updatePlatformSettings(patch: Partial<PlatformSettingsRecord>): Promise<PlatformSettingsRecord> {
+    appCache.invalidatePrefix('public:settings');
     const current = this.getPlatformSettings();
     const next: PlatformSettingsRecord = {
       ...current,
@@ -1282,5 +1331,697 @@ export const db = {
       this.saveState();
     }
     return next;
+  },
+
+  // ---------- High-Performance Scoped & Aggregated Queries ----------
+
+  async findUserByResetTokenHash(tokenHash: string): Promise<UserRecord | null> {
+    if (!tokenHash) return null;
+    if (isMongoConnected()) {
+      const doc = await Models.User.findOne({
+        resetTokenHash: tokenHash,
+        resetTokenExpires: { $gt: new Date() },
+      }).lean();
+      return doc ? { ...(doc as unknown as UserRecord), _id: String(doc._id) } : null;
+    }
+    return (
+      this.getState().users.find(
+        (u) => u.resetTokenHash === tokenHash && u.resetTokenExpires && new Date(u.resetTokenExpires).getTime() > Date.now()
+      ) || null
+    );
+  },
+
+  async listUsersSafe(filters?: { role?: string; q?: string }): Promise<Omit<UserRecord, 'passwordHash' | 'verificationToken' | 'resetTokenHash' | 'resetTokenExpires'>[]> {
+    if (isMongoConnected()) {
+      const query: Record<string, unknown> = {};
+      if (filters?.role) query.role = filters.role;
+      if (filters?.q) {
+        const rx = new RegExp(escapeRegex(filters.q), 'i');
+        query.$or = [{ name: rx }, { email: rx }];
+      }
+      const docs = await Models.User.find(query).select(USER_SAFE_OMIT).sort({ createdAt: -1 }).maxTimeMS(15000).lean();
+      return docs.map((d) => ({ ...(d as unknown as UserRecord), _id: String(d._id) }));
+    }
+    let users = [...this.getState().users];
+    if (filters?.role) users = users.filter((u) => u.role === filters.role);
+    if (filters?.q) {
+      const ql = filters.q.toLowerCase();
+      users = users.filter((u) => u.name.toLowerCase().includes(ql) || u.email.toLowerCase().includes(ql));
+    }
+    return users
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(({ passwordHash: _p, verificationToken: _v, resetTokenHash: _r, resetTokenExpires: _re, ...rest }) => rest);
+  },
+
+  async listUsersByIds(ids: string[]): Promise<UserRecord[]> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    if (isMongoConnected()) {
+      const validIds = unique.filter(isObjectIdLike);
+      if (validIds.length === 0) return [];
+      const docs = await Models.User.find({ _id: { $in: validIds } }).select(USER_SAFE_OMIT).lean();
+      return docs.map((d) => ({ ...(d as unknown as UserRecord), _id: String(d._id) }));
+    }
+    const idSet = new Set(unique);
+    return this.getState().users.filter((u) => idSet.has(u._id));
+  },
+
+  async listCandidateProfilesByUserIds(userIds: string[]): Promise<CandidateProfileRecord[]> {
+    const unique = [...new Set(userIds.filter(Boolean))];
+    if (unique.length === 0) return [];
+    if (isMongoConnected()) {
+      const validIds = unique.filter(isObjectIdLike);
+      if (validIds.length === 0) return [];
+      const docs = await Models.CandidateProfile.find({ userId: { $in: validIds } }).lean();
+      return docs.map((d) => ({
+        ...(d as unknown as CandidateProfileRecord),
+        _id: String(d._id),
+        userId: String(d.userId),
+      }));
+    }
+    const idSet = new Set(unique);
+    return this.getState().candidateProfiles.filter((p) => idSet.has(p.userId));
+  },
+
+  async listCompaniesByIds(ids: string[]): Promise<CompanyRecord[]> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    if (isMongoConnected()) {
+      const validIds = unique.filter(isObjectIdLike);
+      if (validIds.length === 0) return [];
+      const docs = await Models.Company.find({ _id: { $in: validIds } }).lean();
+      return docs.map((d) => mapCompanyDoc(d as unknown as Record<string, unknown>));
+    }
+    const idSet = new Set(unique);
+    return this.getState().companies.filter((c) => idSet.has(c._id));
+  },
+
+  async listOwnedCompanies(recruiterId: string, primaryCompanyId?: string): Promise<CompanyRecord[]> {
+    if (isMongoConnected()) {
+      const orClauses: Record<string, unknown>[] = [];
+      if (isObjectIdLike(recruiterId)) orClauses.push({ ownerRecruiterId: recruiterId });
+      if (primaryCompanyId && isObjectIdLike(primaryCompanyId)) orClauses.push({ _id: primaryCompanyId });
+      if (orClauses.length === 0) return [];
+      const docs = await Models.Company.find({ $or: orClauses }).sort({ createdAt: -1 }).lean();
+      return docs.map((d) => mapCompanyDoc(d as unknown as Record<string, unknown>));
+    }
+    const recId = String(recruiterId);
+    const primId = primaryCompanyId ? String(primaryCompanyId) : '';
+    return this.getState().companies.filter(
+      (c) => (c.ownerRecruiterId && String(c.ownerRecruiterId) === recId) || (primId !== '' && String(c._id) === primId)
+    );
+  },
+
+  async getPublicStats(): Promise<{
+    activeJobs: number;
+    verifiedCompanies: number;
+    totalApplications: number;
+    registeredCandidates: number;
+  }> {
+    return appCache.getOrLoad('public:stats', 20_000, async () => {
+      if (isMongoConnected()) {
+        const [activeJobs, verifiedCompanies, totalApplications, registeredCandidates] = await Promise.all([
+          Models.Job.countDocuments(buildActiveJobMongoFilter()).maxTimeMS(15000),
+          Models.Company.countDocuments({ verified: true }).maxTimeMS(15000),
+          Models.Application.countDocuments().maxTimeMS(15000),
+          Models.User.countDocuments({ role: 'candidate' }).maxTimeMS(15000),
+        ]);
+        return { activeJobs, verifiedCompanies, totalApplications, registeredCandidates };
+      }
+      const now = Date.now();
+      const s = this.getState();
+      return {
+        activeJobs: s.jobs.filter(
+          (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
+        ).length,
+        verifiedCompanies: s.companies.filter((c) => c.verified).length,
+        totalApplications: s.applications.length,
+        registeredCandidates: s.users.filter((u) => u.role === 'candidate').length,
+      };
+    });
+  },
+
+  async listCategoriesWithCounts(): Promise<Array<JobCategoryRecord & { openCount: number }>> {
+    return appCache.getOrLoad('public:categories', 30_000, async () => {
+      if (isMongoConnected()) {
+        const [categories, counts] = await Promise.all([
+          Models.JobCategory.find({ active: true }).sort({ name: 1 }).maxTimeMS(15000).lean(),
+          Models.Job.aggregate<{ _id: string; count: number }>([
+            { $match: buildActiveJobMongoFilter() },
+            { $group: { _id: { $toLower: '$category' }, count: { $sum: 1 } } },
+          ]).option({ maxTimeMS: 15000 }),
+        ]);
+        const countMap = new Map(counts.map((c) => [c._id, c.count]));
+        return categories.map((c) => ({
+          ...(c as unknown as JobCategoryRecord),
+          _id: String(c._id),
+          openCount: countMap.get(c.name.toLowerCase()) || 0,
+        }));
+      }
+      const now = Date.now();
+      const s = this.getState();
+      const activeJobs = s.jobs.filter(
+        (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
+      );
+      return s.jobCategories
+        .filter((c) => c.active)
+        .map((c) => ({
+          ...c,
+          openCount: activeJobs.filter((j) => j.category.toLowerCase() === c.name.toLowerCase()).length,
+        }));
+    });
+  },
+
+  async listCompaniesWithCounts(): Promise<Array<CompanyRecord & { openJobsCount: number }>> {
+    return appCache.getOrLoad('public:companies', 30_000, async () => {
+      if (isMongoConnected()) {
+        const [companies, counts] = await Promise.all([
+          Models.Company.find().sort({ createdAt: -1 }).maxTimeMS(15000).lean(),
+          Models.Job.aggregate<{ _id: unknown; count: number }>([
+            { $match: buildActiveJobMongoFilter() },
+            { $group: { _id: '$companyId', count: { $sum: 1 } } },
+          ]).option({ maxTimeMS: 15000 }),
+        ]);
+        const countMap = new Map(counts.map((c) => [String(c._id), c.count]));
+        return companies.map((c) => ({
+          ...mapCompanyDoc(c as unknown as Record<string, unknown>),
+          openJobsCount: countMap.get(String(c._id)) || 0,
+        }));
+      }
+      const now = Date.now();
+      const s = this.getState();
+      const activeJobs = s.jobs.filter(
+        (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
+      );
+      return s.companies.map((c) => ({
+        ...c,
+        openJobsCount: activeJobs.filter((j) => j.companyId === c._id).length,
+      }));
+    });
+  },
+
+  async listPublishedJobsByCompany(companyId: string): Promise<JobRecord[]> {
+    if (isMongoConnected()) {
+      const docs = await Models.Job.find({
+        ...buildActiveJobMongoFilter(),
+        companyId,
+      })
+        .sort({ publishedAt: -1, createdAt: -1 })
+        .select(JOB_LIST_OMIT)
+        .lean();
+      return docs.map((d) => mapJobDoc(d as unknown as Record<string, unknown>));
+    }
+    const now = Date.now();
+    return this.getState().jobs.filter(
+      (j) =>
+        j.companyId === companyId &&
+        j.status === 'published' &&
+        (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
+    );
+  },
+
+  async listFeaturedJobs(limit = 6): Promise<Array<JobRecord & { company: CompanyRecord | null }>> {
+    return appCache.getOrLoad(`public:featured:${limit}`, 20_000, async () => {
+      if (isMongoConnected()) {
+        const docs = await Models.Job.find(buildActiveJobMongoFilter())
+          .sort({ featured: -1, viewsCount: -1, publishedAt: -1 })
+          .limit(limit)
+          .select(JOB_LIST_OMIT)
+          .maxTimeMS(15000)
+          .lean();
+        const jobs = docs.map((d) => mapJobDoc(d as unknown as Record<string, unknown>));
+        const companies = await this.listCompaniesByIds(jobs.map((j) => j.companyId));
+        const companyMap = new Map(companies.map((c) => [c._id, c]));
+        return jobs.map((j) => ({ ...j, company: companyMap.get(j.companyId) || null }));
+      }
+      const now = Date.now();
+      const s = this.getState();
+      const companyMap = new Map(s.companies.map((c) => [c._id, c]));
+      return s.jobs
+        .filter((j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now))
+        .sort((a, b) => Number(b.featured) - Number(a.featured) || b.viewsCount - a.viewsCount)
+        .slice(0, limit)
+        .map((j) => ({ ...j, company: companyMap.get(j.companyId) || null }));
+    });
+  },
+
+  async getCompanyProfileWithJobs(
+    idOrSlug: string
+  ): Promise<{ company: CompanyRecord; jobs: Array<JobRecord & { company: CompanyRecord }> } | null> {
+    return appCache.getOrLoad(`public:company:${idOrSlug}`, 20_000, async () => {
+      const company = await this.findCompanyById(idOrSlug);
+      if (!company) return null;
+      const jobs = (await this.listPublishedJobsByCompany(company._id)).map((j) => ({ ...j, company }));
+      return { company, jobs };
+    });
+  },
+
+  async getHomeSummaryData() {
+    return appCache.getOrLoad('public:home', 20_000, async () => {
+      const [stats, categories, featuredJobs, latestResult, companies] = await Promise.all([
+        this.getPublicStats(),
+        this.listCategoriesWithCounts(),
+        this.listFeaturedJobs(6),
+        this.queryPublishedJobs({ page: 1, limit: 6, sort: 'latest' }),
+        this.listCompaniesWithCounts(),
+      ]);
+      return {
+        stats,
+        categories,
+        featuredJobs,
+        latestJobs: latestResult.items,
+        companies: companies.slice(0, 12),
+      };
+    });
+  },
+
+  async warmPublicCaches(): Promise<void> {
+    await Promise.all([this.getHomeSummaryData(), this.listJobsForSitemap()]);
+  },
+
+  async queryPublishedJobs(filters: {
+    q?: string;
+    company?: string;
+    category?: string;
+    location?: string;
+    workMode?: string;
+    experience?: string;
+    employmentType?: string;
+    skills?: string;
+    education?: string;
+    salaryMin?: number;
+    salaryMax?: number;
+    postedDays?: number;
+    sort?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<JobRecord & { company: CompanyRecord | null }>;
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const q = (filters.q || '').trim();
+    const company = (filters.company || '').trim();
+    const category = (filters.category || '').trim();
+    const location = (filters.location || '').trim();
+    const workMode = (filters.workMode || '').trim();
+    const experience = (filters.experience || '').trim();
+    const employmentType = (filters.employmentType || '').trim();
+    const skills = (filters.skills || '').trim();
+    const education = (filters.education || '').trim();
+    const salaryMin = Number(filters.salaryMin || 0);
+    const salaryMax = Number(filters.salaryMax || 0);
+    const postedDays = Number(filters.postedDays || 0);
+    const sort = filters.sort || 'latest';
+    const page = Math.max(1, Number(filters.page || 1));
+    const limit = Math.min(50, Math.max(1, Number(filters.limit || 9)));
+
+    const cacheKey = `public:jobs:${JSON.stringify({
+      q,
+      company,
+      category,
+      location,
+      workMode,
+      experience,
+      employmentType,
+      skills,
+      education,
+      salaryMin,
+      salaryMax,
+      postedDays,
+      sort,
+      page,
+      limit,
+    })}`;
+
+    return appCache.getOrLoad(cacheKey, 15_000, async () => {
+      if (isMongoConnected()) {
+        const andClauses: Record<string, unknown>[] = [buildActiveJobMongoFilter()];
+
+        if (q) {
+          const rx = new RegExp(escapeRegex(q), 'i');
+          andClauses.push({
+            $or: [{ title: rx }, { companyName: rx }, { description: rx }, { skills: rx }],
+          });
+        }
+        if (company) {
+          const companyOr: Record<string, unknown>[] = [{ companyName: new RegExp(escapeRegex(company), 'i') }];
+          if (isObjectIdLike(company)) companyOr.push({ companyId: company });
+          andClauses.push({ $or: companyOr });
+        }
+        if (category) {
+          andClauses.push({ category: new RegExp(`^${escapeRegex(category)}$`, 'i') });
+        }
+        if (location) {
+          andClauses.push({ location: new RegExp(escapeRegex(location), 'i') });
+        }
+        if (workMode) {
+          andClauses.push({ workMode });
+        }
+        if (experience) {
+          andClauses.push({ requiredExperience: new RegExp(escapeRegex(experience), 'i') });
+        }
+        if (employmentType) {
+          andClauses.push({ employmentType });
+        }
+        if (skills) {
+          const reqSkills = skills.split(',').map((s) => s.trim()).filter(Boolean);
+          for (const rs of reqSkills) {
+            andClauses.push({ skills: new RegExp(escapeRegex(rs), 'i') });
+          }
+        }
+        if (education) {
+          andClauses.push({ educationQualification: new RegExp(escapeRegex(education), 'i') });
+        }
+        if (salaryMin > 0) {
+          andClauses.push({ $or: [{ salaryMax: { $gte: salaryMin } }, { salaryMin: { $gte: salaryMin } }] });
+        }
+        if (salaryMax > 0) {
+          andClauses.push({ salaryMin: { $lte: salaryMax } });
+        }
+        if (postedDays > 0) {
+          const cutoffDate = new Date(Date.now() - postedDays * 86400_000);
+          andClauses.push({
+            $or: [
+              { publishedAt: { $gte: cutoffDate } },
+              { publishedAt: { $exists: false }, createdAt: { $gte: cutoffDate } },
+            ],
+          });
+        }
+
+        const mongoFilter = andClauses.length === 1 ? andClauses[0] : { $and: andClauses };
+        const sortSpec: Record<string, 1 | -1> =
+          sort === 'oldest'
+            ? { createdAt: 1 }
+            : sort === 'salary_desc'
+              ? { salaryMax: -1, createdAt: -1 }
+              : sort === 'salary_asc'
+                ? { salaryMin: 1, createdAt: -1 }
+                : sort === 'relevant'
+                  ? { featured: -1, viewsCount: -1, publishedAt: -1 }
+                  : { publishedAt: -1, createdAt: -1 };
+
+        const [total, docs] = await Promise.all([
+          Models.Job.countDocuments(mongoFilter).maxTimeMS(15000),
+          Models.Job.find(mongoFilter)
+            .sort(sortSpec)
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .select(JOB_LIST_OMIT)
+            .maxTimeMS(15000)
+            .lean(),
+        ]);
+
+        const jobs = docs.map((d) => mapJobDoc(d as unknown as Record<string, unknown>));
+        const companies = await this.listCompaniesByIds(jobs.map((j) => j.companyId));
+        const companyMap = new Map(companies.map((c) => [c._id, c]));
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+
+        return {
+          items: jobs.map((j) => ({ ...j, company: companyMap.get(j.companyId) || null })),
+          pagination: { page, limit, total, totalPages },
+        };
+      }
+
+      // Local store fallback
+      const ql = q.toLowerCase();
+      const companyL = company.toLowerCase();
+      const categoryL = category.toLowerCase();
+      const locationL = location.toLowerCase();
+      const expL = experience.toLowerCase();
+      const skillsL = skills.toLowerCase();
+      const eduL = education.toLowerCase();
+      const now = Date.now();
+      const s = this.getState();
+      const companyMap = new Map(s.companies.map((c) => [c._id, c]));
+
+      let filtered = s.jobs.filter(
+        (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
+      );
+      if (ql) {
+        filtered = filtered.filter(
+          (j) =>
+            j.title.toLowerCase().includes(ql) ||
+            j.companyName.toLowerCase().includes(ql) ||
+            j.description.toLowerCase().includes(ql) ||
+            j.skills.some((sk) => sk.toLowerCase().includes(ql))
+        );
+      }
+      if (companyL) {
+        filtered = filtered.filter((j) => j.companyName.toLowerCase().includes(companyL) || j.companyId === company);
+      }
+      if (categoryL) filtered = filtered.filter((j) => j.category.toLowerCase() === categoryL);
+      if (locationL) filtered = filtered.filter((j) => j.location.toLowerCase().includes(locationL));
+      if (workMode) filtered = filtered.filter((j) => j.workMode === workMode);
+      if (expL) filtered = filtered.filter((j) => j.requiredExperience.toLowerCase().includes(expL));
+      if (employmentType) filtered = filtered.filter((j) => j.employmentType === employmentType);
+      if (skillsL) {
+        const reqSkills = skillsL.split(',').map((sk) => sk.trim()).filter(Boolean);
+        filtered = filtered.filter((j) => reqSkills.every((rs) => j.skills.some((js) => js.toLowerCase().includes(rs))));
+      }
+      if (eduL) filtered = filtered.filter((j) => j.educationQualification.toLowerCase().includes(eduL));
+      if (salaryMin > 0) filtered = filtered.filter((j) => j.salaryMax >= salaryMin || j.salaryMin >= salaryMin);
+      if (salaryMax > 0) filtered = filtered.filter((j) => j.salaryMin <= salaryMax);
+      if (postedDays > 0) {
+        const cutoff = now - postedDays * 86400_000;
+        filtered = filtered.filter((j) => new Date(j.publishedAt || j.createdAt).getTime() >= cutoff);
+      }
+      filtered.sort((a, b) => {
+        if (sort === 'oldest') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+        if (sort === 'salary_desc') return b.salaryMax - a.salaryMax;
+        if (sort === 'salary_asc') return a.salaryMin - b.salaryMin;
+        if (sort === 'relevant') {
+          return (Number(b.featured) * 50 + b.viewsCount * 0.01) - (Number(a.featured) * 50 + a.viewsCount * 0.01);
+        }
+        return new Date(b.publishedAt || b.createdAt).getTime() - new Date(a.publishedAt || a.createdAt).getTime();
+      });
+
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const offset = (page - 1) * limit;
+      return {
+        items: filtered.slice(offset, offset + limit).map((j) => ({ ...j, company: companyMap.get(j.companyId) || null })),
+        pagination: { page, limit, total, totalPages },
+      };
+    });
+  },
+
+  async listJobsByRecruiter(recruiterId: string): Promise<JobRecord[]> {
+    if (isMongoConnected()) {
+      const docs = await Models.Job.find({ recruiterId }).sort({ createdAt: -1 }).lean();
+      return docs.map((d) => mapJobDoc(d as unknown as Record<string, unknown>));
+    }
+    return this.getState().jobs.filter((j) => j.recruiterId === recruiterId);
+  },
+
+  async listJobsByIds(ids: string[], omitHeavy = true): Promise<JobRecord[]> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return [];
+    if (isMongoConnected()) {
+      const validIds = unique.filter(isObjectIdLike);
+      if (validIds.length === 0) return [];
+      const query = Models.Job.find({ _id: { $in: validIds } });
+      if (omitHeavy) query.select(JOB_LIST_OMIT);
+      const docs = await query.lean();
+      return docs.map((d) => mapJobDoc(d as unknown as Record<string, unknown>));
+    }
+    const idSet = new Set(unique);
+    return this.getState().jobs.filter((j) => idSet.has(j._id));
+  },
+
+  async listJobsForSitemap(): Promise<Array<{ _id: string }>> {
+    return appCache.getOrLoad('public:sitemap', 120_000, async () => {
+      if (isMongoConnected()) {
+        const docs = await Models.Job.find({ status: 'published' }).select('_id').maxTimeMS(15000).lean();
+        return docs.map((d) => ({ _id: String(d._id) }));
+      }
+      return this.getState().jobs.filter((j) => j.status === 'published').map((j) => ({ _id: j._id }));
+    });
+  },
+
+  async incrementJobViews(id: string): Promise<void> {
+    if (isMongoConnected()) {
+      await Models.Job.updateOne({ _id: id }, { $inc: { viewsCount: 1 } });
+      return;
+    }
+    const job = this.getState().jobs.find((j) => j._id === id);
+    if (job) {
+      job.viewsCount = (job.viewsCount || 0) + 1;
+      this.saveState();
+    }
+  },
+
+  async hasSavedJob(candidateId: string, jobId: string): Promise<boolean> {
+    if (isMongoConnected()) {
+      const exists = await Models.SavedJob.exists({ candidateId, jobId });
+      return Boolean(exists);
+    }
+    return this.getState().savedJobs.some((s) => s.candidateId === candidateId && s.jobId === jobId);
+  },
+
+  async listApplicationsByCandidate(candidateId: string): Promise<ApplicationRecord[]> {
+    if (isMongoConnected()) {
+      const docs = await Models.Application.find({ candidateId }).sort({ appliedAt: -1 }).maxTimeMS(15000).lean();
+      return docs.map((d) => mapAppDoc(d as unknown as Record<string, unknown>));
+    }
+    return this.getState().applications.filter((a) => a.candidateId === candidateId);
+  },
+
+  async listApplicationsByRecruiter(
+    recruiterId: string | null,
+    filters?: { status?: string; jobId?: string; companyId?: string }
+  ): Promise<ApplicationRecord[]> {
+    if (isMongoConnected()) {
+      const query: Record<string, unknown> = {};
+      if (recruiterId) query.recruiterId = recruiterId;
+      if (filters?.status) query.status = filters.status;
+      if (filters?.jobId) query.jobId = filters.jobId;
+      if (filters?.companyId) query.companyId = filters.companyId;
+      const docs = await Models.Application.find(query).sort({ appliedAt: -1 }).maxTimeMS(15000).lean();
+      return docs.map((d) => mapAppDoc(d as unknown as Record<string, unknown>));
+    }
+    return this.getState().applications.filter(
+      (a) =>
+        (!recruiterId || a.recruiterId === recruiterId) &&
+        (!filters?.status || a.status === filters.status) &&
+        (!filters?.jobId || a.jobId === filters.jobId) &&
+        (!filters?.companyId || a.companyId === filters.companyId)
+    );
+  },
+
+  async hasRecruiterResumeAccess(recruiterId: string, resumePublicId: string): Promise<boolean> {
+    if (isMongoConnected()) {
+      const exists = await Models.Application.exists({ recruiterId, resumePublicId });
+      return Boolean(exists);
+    }
+    return this.getState().applications.some((a) => a.recruiterId === recruiterId && a.resumePublicId === resumePublicId);
+  },
+
+  async listInterviewsByUser(role: string, userId: string): Promise<InterviewRecord[]> {
+    if (isMongoConnected()) {
+      const query: Record<string, unknown> =
+        role === 'admin' ? {} : role === 'recruiter' ? { recruiterId: userId } : { candidateId: userId };
+      const docs = await Models.Interview.find(query).sort({ date: 1, time: 1 }).maxTimeMS(15000).lean();
+      return docs.map((d) => ({
+        ...(d as unknown as InterviewRecord),
+        _id: String(d._id),
+        applicationId: String(d.applicationId),
+        jobId: String(d.jobId),
+        candidateId: String(d.candidateId),
+        recruiterId: String(d.recruiterId),
+      }));
+    }
+    return this.getState().interviews.filter((i) => {
+      if (role === 'admin') return true;
+      if (role === 'recruiter') return i.recruiterId === userId;
+      return i.candidateId === userId;
+    });
+  },
+
+  async getAdminDashboardMetrics(): Promise<{
+    stats: {
+      totalUsers: number;
+      candidates: number;
+      recruiters: number;
+      pendingRecruiters: number;
+      companies: number;
+      totalJobs: number;
+      publishedJobs: number;
+      totalApplications: number;
+      categories: number;
+      campaigns: number;
+      unreadMessages: number;
+    };
+    categoryBreakdown: Array<{ name: string; jobs: number }>;
+    applicationStatusBreakdown: Array<{ status: string; count: number }>;
+  }> {
+    if (isMongoConnected()) {
+      const [
+        totalUsers,
+        candidates,
+        recruiters,
+        pendingRecruiters,
+        companies,
+        totalJobs,
+        publishedJobs,
+        totalApplications,
+        categoriesList,
+        campaigns,
+        unreadMessages,
+        jobCatAgg,
+        appStatusAgg,
+      ] = await Promise.all([
+        Models.User.countDocuments().maxTimeMS(15000),
+        Models.User.countDocuments({ role: 'candidate' }).maxTimeMS(15000),
+        Models.User.countDocuments({ role: 'recruiter' }).maxTimeMS(15000),
+        Models.RecruiterProfile.countDocuments({ verificationStatus: 'pending' }).maxTimeMS(15000),
+        Models.Company.countDocuments().maxTimeMS(15000),
+        Models.Job.countDocuments().maxTimeMS(15000),
+        Models.Job.countDocuments({ status: 'published' }).maxTimeMS(15000),
+        Models.Application.countDocuments().maxTimeMS(15000),
+        Models.JobCategory.find().select('name').sort({ name: 1 }).maxTimeMS(15000).lean(),
+        Models.EmailCampaign.countDocuments().maxTimeMS(15000),
+        Models.ContactMessage.countDocuments({ status: 'new' }).maxTimeMS(15000),
+        Models.Job.aggregate<{ _id: string; count: number }>([{ $group: { _id: '$category', count: { $sum: 1 } } }]).option({ maxTimeMS: 15000 }),
+        Models.Application.aggregate<{ _id: string; count: number }>([{ $group: { _id: '$status', count: { $sum: 1 } } }]).option({ maxTimeMS: 15000 }),
+      ]);
+
+      const jobCatMap = new Map(jobCatAgg.map((g) => [g._id, g.count]));
+      const appStatusMap = new Map(appStatusAgg.map((g) => [g._id, g.count]));
+
+      return {
+        stats: {
+          totalUsers,
+          candidates,
+          recruiters,
+          pendingRecruiters,
+          companies,
+          totalJobs,
+          publishedJobs,
+          totalApplications,
+          categories: categoriesList.length,
+          campaigns,
+          unreadMessages,
+        },
+        categoryBreakdown: categoriesList.map((cat) => ({
+          name: cat.name,
+          jobs: jobCatMap.get(cat.name) || 0,
+        })),
+        applicationStatusBreakdown: [
+          { status: 'Applied', count: appStatusMap.get('Applied') || 0 },
+          { status: 'Shortlisted', count: appStatusMap.get('Shortlisted') || 0 },
+          { status: 'Interview', count: appStatusMap.get('Interview Scheduled') || 0 },
+          { status: 'Selected', count: appStatusMap.get('Selected') || 0 },
+          { status: 'Rejected', count: appStatusMap.get('Rejected') || 0 },
+        ],
+      };
+    }
+
+    const s = this.getState();
+    return {
+      stats: {
+        totalUsers: s.users.length,
+        candidates: s.users.filter((u) => u.role === 'candidate').length,
+        recruiters: s.users.filter((u) => u.role === 'recruiter').length,
+        pendingRecruiters: s.recruiterProfiles.filter((r) => r.verificationStatus === 'pending').length,
+        companies: s.companies.length,
+        totalJobs: s.jobs.length,
+        publishedJobs: s.jobs.filter((j) => j.status === 'published').length,
+        totalApplications: s.applications.length,
+        categories: s.jobCategories.length,
+        campaigns: s.emailCampaigns.length,
+        unreadMessages: s.contactMessages.filter((m) => m.status === 'new').length,
+      },
+      categoryBreakdown: s.jobCategories.map((cat) => ({
+        name: cat.name,
+        jobs: s.jobs.filter((j) => j.category === cat.name).length,
+      })),
+      applicationStatusBreakdown: [
+        { status: 'Applied', count: s.applications.filter((a) => a.status === 'Applied').length },
+        { status: 'Shortlisted', count: s.applications.filter((a) => a.status === 'Shortlisted').length },
+        { status: 'Interview', count: s.applications.filter((a) => a.status === 'Interview Scheduled').length },
+        { status: 'Selected', count: s.applications.filter((a) => a.status === 'Selected').length },
+        { status: 'Rejected', count: s.applications.filter((a) => a.status === 'Rejected').length },
+      ],
+    };
   },
 };

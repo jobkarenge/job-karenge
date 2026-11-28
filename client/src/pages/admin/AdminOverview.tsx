@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { api } from '../../services/api';
+
+const DashboardBarChart = lazy(() => import('../../components/charts/DashboardBarChart'));
 
 interface AdminDashboardData {
   stats: {
@@ -23,7 +24,7 @@ interface AdminDashboardData {
   integrationStatus: {
     mongodbConfigured: boolean;
     cloudinaryConfigured: boolean;
-    brevoConfigured: boolean;
+    emailConfigured: boolean;
   };
 }
 
@@ -75,8 +76,8 @@ export function AdminOverview() {
           <StatusIndicator status={data.integrationStatus.cloudinaryConfigured ? 'Active' : 'Pending'} />
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Brevo Email API</span>
-          <StatusIndicator status={data.integrationStatus.brevoConfigured ? 'Active' : 'Pending'} />
+          <span className="text-sm font-medium">Gmail SMTP Email</span>
+          <StatusIndicator status={data.integrationStatus.emailConfigured ? 'Active' : 'Pending'} />
         </div>
       </Link>
 
@@ -102,15 +103,15 @@ export function AdminOverview() {
             </Link>
           </div>
           <div className="mt-4 h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.categoryBreakdown}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Bar dataKey="jobs" fill="#102A43" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="h-full w-full rounded-lg bg-slate-100 dark:bg-slate-800 animate-pulse" />}>
+              <DashboardBarChart
+                data={data.categoryBreakdown}
+                xKey="name"
+                barKey="jobs"
+                barColor="#102A43"
+                xFontSize={10}
+              />
+            </Suspense>
           </div>
         </div>
 
@@ -122,15 +123,14 @@ export function AdminOverview() {
             </Link>
           </div>
           <div className="mt-4 h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data.applicationStatusBreakdown}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="status" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#2563EB" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="h-full w-full rounded-lg bg-slate-100 dark:bg-slate-800 animate-pulse" />}>
+              <DashboardBarChart
+                data={data.applicationStatusBreakdown}
+                xKey="status"
+                barKey="count"
+                barColor="#2563EB"
+              />
+            </Suspense>
           </div>
         </div>
       </div>

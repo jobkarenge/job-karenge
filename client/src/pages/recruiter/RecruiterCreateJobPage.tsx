@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, fetchCategories, getApiErrorMessage, invalidateCategoriesCache } from '../../services/api';
 import type { Company } from '../../types';
 
 export function RecruiterCreateJobPage() {
@@ -83,10 +83,9 @@ export function RecruiterCreateJobPage() {
   );
 
   useEffect(() => {
-    api
-      .get('/jobs/categories')
-      .then((res) => {
-        const names = (res.data.data || []).map((c: { name: string }) => c.name);
+    fetchCategories()
+      .then((cats) => {
+        const names = cats.map((c) => c.name);
         if (names.length > 0) setCategories(names);
       })
       .catch(() => {});
@@ -168,6 +167,7 @@ export function RecruiterCreateJobPage() {
     setCreatingCategory(true);
     try {
       const res = await api.post('/jobs/categories', { name: trimmed });
+      invalidateCategoriesCache();
       const createdName: string = res.data?.data?.name || trimmed;
       setCategories((prev) => (prev.some((c) => c.toLowerCase() === createdName.toLowerCase()) ? prev : [...prev, createdName]));
       setForm((prev) => ({ ...prev, category: createdName }));

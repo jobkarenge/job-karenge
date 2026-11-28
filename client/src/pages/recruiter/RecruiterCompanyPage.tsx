@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
+import { api, getApiErrorMessage, optimizeCloudinaryImageUrl } from '../../services/api';
 import type { Company, RecruiterProfile } from '../../types';
 
 const emptyNewCompany = {
@@ -359,7 +359,16 @@ export function RecruiterCompanyPage() {
               >
                 <div className="w-10 h-10 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                   {c.logoUrl ? (
-                    <img src={resolveApiAssetUrl(c.logoUrl)} alt={c.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                    <img
+                      src={optimizeCloudinaryImageUrl(c.logoUrl, { width: 80, height: 80, crop: 'fill' })}
+                      alt={c.name}
+                      width={40}
+                      height={40}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover"
+                    />
                   ) : (
                     <Building2 className="w-5 h-5 text-slate-400" />
                   )}
@@ -383,8 +392,11 @@ export function RecruiterCompanyPage() {
             <div className="h-36 bg-slate-100 dark:bg-slate-800 relative">
               {selectedCompany.bannerUrl && (
                 <img
-                  src={resolveApiAssetUrl(selectedCompany.bannerUrl)}
+                  src={optimizeCloudinaryImageUrl(selectedCompany.bannerUrl, { width: 1200, height: 360, crop: 'fill' })}
                   alt={`${selectedCompany.name} banner`}
+                  width={1200}
+                  height={360}
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover"
                 />
@@ -401,8 +413,11 @@ export function RecruiterCompanyPage() {
                 <div className="w-16 h-16 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                   {selectedCompany.logoUrl ? (
                     <img
-                      src={resolveApiAssetUrl(selectedCompany.logoUrl)}
+                      src={optimizeCloudinaryImageUrl(selectedCompany.logoUrl, { width: 128, height: 128, crop: 'fill' })}
                       alt={selectedCompany.name}
+                      width={64}
+                      height={64}
+                      decoding="async"
                       referrerPolicy="no-referrer"
                       className="w-full h-full object-cover"
                     />

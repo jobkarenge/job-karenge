@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { SkeletonList } from '../../components/common/UIPrimitives';
 import { useAuth } from '../../context/AuthContext';
-import { api, getAccessToken, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
+import { api, getAccessToken, getApiErrorMessage, optimizeCloudinaryImageUrl, resolveApiAssetUrl } from '../../services/api';
 import type { CandidateProfile } from '../../types';
 import { formatShortDate } from '../../utils/formatters';
 
@@ -231,7 +231,15 @@ export function CandidateProfilePage() {
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-full border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0">
               {user?.profileImage ? (
-                <img src={resolveApiAssetUrl(user.profileImage)} alt={user.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                <img
+                  src={optimizeCloudinaryImageUrl(user.profileImage, { width: 128, height: 128, crop: 'fill' })}
+                  alt={user.name}
+                  width={64}
+                  height={64}
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 <UserCircle className="w-9 h-9 text-slate-400" />
               )}

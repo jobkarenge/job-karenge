@@ -1,15 +1,8 @@
-import crypto from 'crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { env } from '../config/env.ts';
 import { requireAuth, type AuthenticatedRequest } from '../middleware/authMiddleware.ts';
 import { resolveLocalFilePath } from '../services/cloudinaryService.ts';
-import {
-  processBrevoWebhookEvent,
-  syncCandidateContactToBrevo,
-  verifyUnsubscribeToken,
-  type BrevoWebhookPayload,
-} from '../services/emailService.ts';
+import { verifyUnsubscribeToken } from '../services/emailService.ts';
 import { db } from '../store/dataLayer.ts';
 
 export const notificationRouter = Router();
@@ -71,15 +64,11 @@ emailRouter.put('/preferences', requireAuth, async (req: AuthenticatedRequest, r
   }
 
   const updated = await db.updateEmailPreference(req.user!._id, patch);
-  const syncResult = await syncCandidateContactToBrevo(req.user!._id);
 
   res.json({
     success: true,
-    message: syncResult.synced
-      ? 'Email preferences saved & synchronized with Brevo.'
-      : 'Email preferences saved.',
-    data: await db.getEmailPreference(req.user!._id),
-    brevoSynced: syncResult.synced,
+    message: 'Email preferences saved.',
+    data: updated,
   });
 });
 
@@ -99,45 +88,10 @@ emailRouter.post('/unsubscribe', async (req, res) => {
     unsubscribedAt: new Date().toISOString(),
   });
 
-  await syncCandidateContactToBrevo(decoded.userId);
-
   res.json({
     success: true,
     message: `Unsubscribed ${decoded.email} from promotional job alerts. Essential transactional notifications remain active.`,
   });
-});
-
-function verifyWebhookToken(supplied: string, expected: string): boolean {
-  if (!supplied || !expected) return false;
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-emailRouter.post('/webhooks/brevo', async (req, res) => {
-  if (env.brevoWebhookSecret) {
-    const headerSecret =
-      String(req.headers['x-brevo-webhook-secret'] || req.headers['authorization'] || '')
-        .replace(/^Bearer\s+/i, '')
-        .trim() || String(req.query.secret || '').trim();
-
-    if (!verifyWebhookToken(headerSecret, env.brevoWebhookSecret)) {
-      return res.status(401).json({ success: false, message: 'Unauthorized Brevo webhook request.' });
-    }
-  }
-
-  const rawBody = req.body;
-  const events: BrevoWebhookPayload[] = Array.isArray(rawBody) ? rawBody : [rawBody];
-  let processed = 0;
-
-  for (const evt of events) {
-    if (!evt || typeof evt !== 'object') continue;
-    const outcome = await processBrevoWebhookEvent(evt);
-    if (outcome.handled) processed++;
-  }
-
-  res.json({ success: true, processed });
 });
 
 export const filesRouter = Router();
@@ -165,8 +119,7 @@ filesRouter.get('/resume/:fileName', requireAuth, async (req: AuthenticatedReque
       return res.status(403).json({ success: false, message: 'Unauthorized resume access.' });
     }
   } else if (req.user!.role === 'recruiter') {
-    const apps = await db.listApplications();
-    const allowed = apps.some((a) => a.recruiterId === req.user!._id && a.resumePublicId === fileName);
+    const allowed = await db.hasRecruiterResumeAccess(req.user!._id, fileName);
     if (!allowed) {
       return res.status(403).json({ success: false, message: 'Unauthorized resume access.' });
     }

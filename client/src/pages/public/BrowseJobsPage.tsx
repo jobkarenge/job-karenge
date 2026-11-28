@@ -1,11 +1,11 @@
 import { Filter, Search, X } from 'lucide-react';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { EmptyState, SkeletonList } from '../../components/common/UIPrimitives';
 import { JobCard } from '../../components/jobs/JobCard';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, fetchCategories, fetchSavedJobIds, getApiErrorMessage, invalidateSavedJobsCache } from '../../services/api';
 import type { Job } from '../../types';
 
 export function BrowseJobsPage() {
@@ -34,17 +34,18 @@ export function BrowseJobsPage() {
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
-    api.get('/jobs/categories').then((res) => {
-      setCategories((res.data.data || []).map((c: { name: string }) => c.name));
-    });
+    fetchCategories()
+      .then((cats) => setCategories(cats.map((c) => c.name)))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     if (user?.role === 'candidate') {
-      api
-        .get('/candidate/saved-jobs')
-        .then((res) => setSavedIds(new Set((res.data.data || []).map((s: { jobId: string }) => s.jobId))))
+      fetchSavedJobIds(user._id)
+        .then((ids) => setSavedIds(ids))
         .catch(() => {});
+    } else {
+      setSavedIds(new Set());
     }
   }, [user]);
 
@@ -77,12 +78,28 @@ export function BrowseJobsPage() {
     }
   }, [q, category, location, workMode, employmentType, experience, skills, salaryMin, postedDays, sort, page, setSearchParams]);
 
+  const hasMountedRef = useRef(false);
+  const prevTextRef = useRef({ q, location, skills });
+
   useEffect(() => {
+    const textChanged =
+      hasMountedRef.current &&
+      (prevTextRef.current.q !== q ||
+        prevTextRef.current.location !== location ||
+        prevTextRef.current.skills !== skills);
+    prevTextRef.current = { q, location, skills };
+
+    if (!hasMountedRef.current || !textChanged) {
+      hasMountedRef.current = true;
+      void fetchJobs();
+      return;
+    }
+
     const timer = setTimeout(() => {
-      fetchJobs();
+      void fetchJobs();
     }, 220);
     return () => clearTimeout(timer);
-  }, [fetchJobs]);
+  }, [fetchJobs, q, location, skills]);
 
   const clearFilters = () => {
     setQ('');
@@ -109,6 +126,7 @@ export function BrowseJobsPage() {
     }
     try {
       const res = await api.post(`/candidate/saved-jobs/${jobId}`);
+      invalidateSavedJobsCache();
       const saved = Boolean(res.data.data?.saved);
       setSavedIds((prev) => {
         const next = new Set(prev);

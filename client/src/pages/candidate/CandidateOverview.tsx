@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { EmptyState, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { JobCard } from '../../components/jobs/JobCard';
 import { api } from '../../services/api';
 import type { Application, Interview, Job } from '../../types';
 import { formatShortDate } from '../../utils/formatters';
+
+const DashboardBarChart = lazy(() => import('../../components/charts/DashboardBarChart'));
 
 interface CandidateDashboardData {
   stats: {
@@ -112,15 +113,9 @@ export function CandidateOverview() {
             </Link>
           </div>
           <div className="mt-4 h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="stage" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#2563EB" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="h-full w-full rounded-lg bg-slate-100 dark:bg-slate-800 animate-pulse" />}>
+              <DashboardBarChart data={chartData} xKey="stage" barKey="count" barColor="#2563EB" />
+            </Suspense>
           </div>
         </div>
 

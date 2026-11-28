@@ -219,5 +219,4 @@ export interface EmailPreference {
   preferredWorkModes: string[];
   frequency: 'daily' | 'weekly' | 'monthly';
   unsubscribedAt?: string;
-  brevoSyncedAt?: string;
 }

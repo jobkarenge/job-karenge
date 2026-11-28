@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, fetchPublicSettings, getApiErrorMessage } from '../../services/api';
 
 export function AboutPage() {
   return (
@@ -23,7 +23,7 @@ export function AboutPage() {
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white">For Hiring Teams</h2>
           <p className="mt-2 text-sm text-slate-600 dark:text-slate-400 leading-relaxed">
-            Publish and schedule openings, manage applicant pipelines with bulk actions and private feedback, schedule interviews with automated Brevo email alerts, and export records to CSV.
+            Publish and schedule openings, manage applicant pipelines with bulk actions and private feedback, schedule interviews with automated transactional email alerts, and export records to CSV.
           </p>
         </div>
       </div>
@@ -38,10 +38,9 @@ export function ContactPage() {
   const [supportEmail, setSupportEmail] = useState('support@jobkarenge.com');
 
   useEffect(() => {
-    api
-      .get('/public/settings')
-      .then((res) => {
-        if (res.data?.data?.supportEmail) setSupportEmail(res.data.data.supportEmail);
+    fetchPublicSettings()
+      .then((data) => {
+        if (data?.supportEmail) setSupportEmail(data.supportEmail);
       })
       .catch(() => {});
   }, []);

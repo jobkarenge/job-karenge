@@ -44,43 +44,24 @@ const jobInputSchema = z.object({
   companyId: z.string().optional(),
 });
 
+router.get('/home', async (_req, res) => {
+  const data = await db.getHomeSummaryData();
+  res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
+  res.json({ success: true, data });
+});
+
 router.get('/stats', async (_req, res) => {
-  const [jobs, companies, applications, users] = await Promise.all([
-    db.listJobs(),
-    db.listCompanies(),
-    db.listApplications(),
-    db.listUsers(),
-  ]);
-
-  const activeJobs = jobs.filter(
-    (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= Date.now())
-  );
-
+  const stats = await db.getPublicStats();
+  res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
   res.json({
     success: true,
-    data: {
-      activeJobs: activeJobs.length,
-      verifiedCompanies: companies.filter((c) => c.verified).length,
-      totalApplications: applications.length,
-      registeredCandidates: users.filter((u) => u.role === 'candidate').length,
-    },
+    data: stats,
   });
 });
 
 router.get('/categories', async (_req, res) => {
-  const [categories, jobs] = await Promise.all([db.listCategories(), db.listJobs()]);
-  const now = Date.now();
-  const activeJobs = jobs.filter(
-    (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
-  );
-
-  const enriched = categories
-    .filter((c) => c.active)
-    .map((c) => ({
-      ...c,
-      openCount: activeJobs.filter((j) => j.category.toLowerCase() === c.name.toLowerCase()).length,
-    }));
-
+  const enriched = await db.listCategoriesWithCounts();
+  res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
   res.json({ success: true, data: enriched });
 });
 
@@ -114,149 +95,49 @@ router.post('/categories', requireAuth, requireRole('recruiter', 'admin'), async
 });
 
 router.get('/featured', async (_req, res) => {
-  const [jobs, companies] = await Promise.all([db.listJobs(), db.listCompanies()]);
-  const companyMap = new Map(companies.map((c) => [c._id, c]));
-  const now = Date.now();
-
-  const featured = jobs
-    .filter((j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now))
-    .sort((a, b) => Number(b.featured) - Number(a.featured) || b.viewsCount - a.viewsCount)
-    .slice(0, 6)
-    .map((j) => ({ ...j, company: companyMap.get(j.companyId) || null }));
-
+  const featured = await db.listFeaturedJobs(6);
+  res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
   res.json({ success: true, data: featured });
 });
 
 router.get('/companies', async (_req, res) => {
-  const [companies, jobs] = await Promise.all([db.listCompanies(), db.listJobs()]);
-  const now = Date.now();
-  const activeJobs = jobs.filter(
-    (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
-  );
-
-  const enriched = companies.map((c) => ({
-    ...c,
-    openJobsCount: activeJobs.filter((j) => j.companyId === c._id).length,
-  }));
-
+  const enriched = await db.listCompaniesWithCounts();
+  res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
   res.json({ success: true, data: enriched });
 });
 
 router.get('/companies/:id', async (req, res) => {
-  const companies = await db.listCompanies();
-  const company = companies.find((c) => c._id === req.params.id || c.slug === req.params.id);
-  if (!company) {
+  const detail = await db.getCompanyProfileWithJobs(String(req.params.id));
+  if (!detail) {
     return res.status(404).json({ success: false, message: 'Company not found' });
   }
-  const jobs = (await db.listJobs())
-    .filter(
-      (j) =>
-        j.companyId === company._id &&
-        j.status === 'published' &&
-        (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= Date.now())
-    )
-    .map((j) => ({ ...j, company }));
-  res.json({ success: true, data: { company, jobs } });
+  res.setHeader('Cache-Control', 'public, max-age=20, stale-while-revalidate=40');
+  res.json({ success: true, data: detail });
 });
 
 router.get('/', async (req, res) => {
-  const q = String(req.query.q || '').trim().toLowerCase();
-  const company = String(req.query.company || '').trim().toLowerCase();
-  const category = String(req.query.category || '').trim().toLowerCase();
-  const location = String(req.query.location || '').trim().toLowerCase();
-  const workMode = String(req.query.workMode || '').trim();
-  const experience = String(req.query.experience || '').trim().toLowerCase();
-  const employmentType = String(req.query.employmentType || '').trim();
-  const skills = String(req.query.skills || '').trim().toLowerCase();
-  const education = String(req.query.education || '').trim().toLowerCase();
-  const salaryMin = Number(req.query.salaryMin || 0);
-  const salaryMax = Number(req.query.salaryMax || 0);
-  const postedDays = Number(req.query.postedDays || 0);
-  const sort = String(req.query.sort || 'latest');
-  const page = Math.max(1, Number(req.query.page || 1));
-  const limit = Math.min(50, Math.max(1, Number(req.query.limit || 9)));
-
-  const [allJobs, companies] = await Promise.all([db.listJobs(), db.listCompanies()]);
-  const companyMap = new Map(companies.map((c) => [c._id, c]));
-  const now = Date.now();
-
-  let filtered = allJobs.filter(
-    (j) => j.status === 'published' && (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now)
-  );
-
-  if (q) {
-    filtered = filtered.filter(
-      (j) =>
-        j.title.toLowerCase().includes(q) ||
-        j.companyName.toLowerCase().includes(q) ||
-        j.description.toLowerCase().includes(q) ||
-        j.skills.some((s) => s.toLowerCase().includes(q))
-    );
-  }
-  if (company) {
-    filtered = filtered.filter((j) => j.companyName.toLowerCase().includes(company) || j.companyId === company);
-  }
-  if (category) {
-    filtered = filtered.filter((j) => j.category.toLowerCase() === category);
-  }
-  if (location) {
-    filtered = filtered.filter((j) => j.location.toLowerCase().includes(location));
-  }
-  if (workMode) {
-    filtered = filtered.filter((j) => j.workMode === workMode);
-  }
-  if (experience) {
-    filtered = filtered.filter((j) => j.requiredExperience.toLowerCase().includes(experience));
-  }
-  if (employmentType) {
-    filtered = filtered.filter((j) => j.employmentType === employmentType);
-  }
-  if (skills) {
-    const reqSkills = skills.split(',').map((s) => s.trim()).filter(Boolean);
-    filtered = filtered.filter((j) =>
-      reqSkills.every((rs) => j.skills.some((js) => js.toLowerCase().includes(rs)))
-    );
-  }
-  if (education) {
-    filtered = filtered.filter((j) => j.educationQualification.toLowerCase().includes(education));
-  }
-  if (salaryMin > 0) {
-    filtered = filtered.filter((j) => j.salaryMax >= salaryMin || j.salaryMin >= salaryMin);
-  }
-  if (salaryMax > 0) {
-    filtered = filtered.filter((j) => j.salaryMin <= salaryMax);
-  }
-  if (postedDays > 0) {
-    const cutoff = now - postedDays * 86400_000;
-    filtered = filtered.filter((j) => new Date(j.publishedAt || j.createdAt).getTime() >= cutoff);
-  }
-
-  filtered.sort((a, b) => {
-    if (sort === 'oldest') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-    if (sort === 'salary_desc') return b.salaryMax - a.salaryMax;
-    if (sort === 'salary_asc') return a.salaryMin - b.salaryMin;
-    if (sort === 'relevant') {
-      const scoreA = (a.featured ? 50 : 0) + (q && a.title.toLowerCase().includes(q) ? 30 : 0) + a.viewsCount * 0.01;
-      const scoreB = (b.featured ? 50 : 0) + (q && b.title.toLowerCase().includes(q) ? 30 : 0) + b.viewsCount * 0.01;
-      return scoreB - scoreA;
-    }
-    return new Date(b.publishedAt || b.createdAt).getTime() - new Date(a.publishedAt || a.createdAt).getTime();
+  const result = await db.queryPublishedJobs({
+    q: String(req.query.q || ''),
+    company: String(req.query.company || ''),
+    category: String(req.query.category || ''),
+    location: String(req.query.location || ''),
+    workMode: String(req.query.workMode || ''),
+    experience: String(req.query.experience || ''),
+    employmentType: String(req.query.employmentType || ''),
+    skills: String(req.query.skills || ''),
+    education: String(req.query.education || ''),
+    salaryMin: Number(req.query.salaryMin || 0),
+    salaryMax: Number(req.query.salaryMax || 0),
+    postedDays: Number(req.query.postedDays || 0),
+    sort: String(req.query.sort || 'latest'),
+    page: Math.max(1, Number(req.query.page || 1)),
+    limit: Math.min(50, Math.max(1, Number(req.query.limit || 9))),
   });
 
-  const total = filtered.length;
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-  const offset = (page - 1) * limit;
-  const items = filtered.slice(offset, offset + limit).map((j) => ({
-    ...j,
-    company: companyMap.get(j.companyId) || null,
-  }));
-
+  res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
   res.json({
     success: true,
-    data: {
-      items,
-      pagination: { page, limit, total, totalPages },
-    },
+    data: result,
   });
 });
 
@@ -266,26 +147,28 @@ router.get('/:id', optionalAuth, async (req: AuthenticatedRequest, res) => {
     return res.status(404).json({ success: false, message: 'Job listing not found' });
   }
 
-  // Increment views count cleanly
-  await db.updateJob(job._id, { viewsCount: (job.viewsCount || 0) + 1 });
-  const company = await db.findCompanyById(job.companyId);
+  const isCandidate = req.user?.role === 'candidate';
+  const [company, dup, isSaved] = await Promise.all([
+    db.findCompanyById(job.companyId),
+    isCandidate ? db.findDuplicateApplication(req.user!._id, job._id) : Promise.resolve(null),
+    isCandidate ? db.hasSavedJob(req.user!._id, job._id) : Promise.resolve(false),
+    db.incrementJobViews(job._id),
+  ]);
 
-  let hasApplied = false;
-  let isSaved = false;
-  if (req.user?.role === 'candidate') {
-    const dup = await db.findDuplicateApplication(req.user._id, job._id);
-    hasApplied = Boolean(dup);
-    const saved = await db.listSavedJobs(req.user._id);
-    isSaved = saved.some((s) => s.jobId === job._id);
+  res.setHeader('Vary', 'Authorization, Cookie');
+  if (req.user) {
+    res.setHeader('Cache-Control', 'no-store');
+  } else {
+    res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=30');
   }
 
   res.json({
     success: true,
     data: {
       ...job,
-      viewsCount: job.viewsCount + 1,
+      viewsCount: (job.viewsCount || 0) + 1,
       company,
-      hasApplied,
+      hasApplied: Boolean(dup),
       isSaved,
     },
   });

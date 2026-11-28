@@ -247,7 +247,6 @@ export interface EmailPreferenceRecord {
   preferredWorkModes: string[];
   frequency: 'daily' | 'weekly' | 'monthly';
   unsubscribedAt?: string;
-  brevoSyncedAt?: string;
   updatedAt: string;
 }
 
@@ -288,7 +287,8 @@ export interface EmailLogRecord {
   templateName: string;
   subject: string;
   status: 'queued' | 'sent' | 'delivered' | 'bounced' | 'simulated' | 'failed';
-  provider?: 'brevo';
+  provider?: 'gmail_smtp' | 'brevo';
+  smtpEvent?: string;
   brevoEvent?: string;
   campaignId?: string;
   jobId?: string;
@@ -369,6 +369,8 @@ export interface PlatformSettingsRecord {
   maxPdfSizeBytes: number;
   promotionalDigestEnabled: boolean;
   supportEmail: string;
+  emailFromEmail?: string;
+  emailFromName?: string;
   brevoSenderEmail?: string;
   brevoSenderName?: string;
   clientUrl?: string;

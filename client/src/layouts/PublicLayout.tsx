@@ -4,7 +4,7 @@ import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { BrandLogo, ThemeToggle } from '../components/common/UIPrimitives';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
-import { api } from '../services/api';
+import { fetchPublicSettings, invalidatePublicSettingsCache } from '../services/api';
 import { formatRelativeDate } from '../utils/formatters';
 
 interface PublicSocialLinks {
@@ -38,23 +38,26 @@ export function PublicLayout() {
 
   useEffect(() => {
     let active = true;
-    const loadSettings = () => {
-      api
-        .get('/public/settings')
-        .then((res) => {
-          const email = res.data?.data?.supportEmail;
-          const links = res.data?.data?.socialLinks;
+    const loadSettings = (force = false) => {
+      fetchPublicSettings(force)
+        .then((data) => {
           if (!active) return;
-          if (email) setSupportEmail(email);
-          if (links && typeof links === 'object') setSocialLinks(links);
+          if (data?.supportEmail) setSupportEmail(data.supportEmail);
+          if (data?.socialLinks && typeof data.socialLinks === 'object') {
+            setSocialLinks(data.socialLinks);
+          }
         })
         .catch(() => {});
     };
-    loadSettings();
-    window.addEventListener('jk:settings-updated', loadSettings);
+    const handleSettingsUpdated = () => {
+      invalidatePublicSettingsCache();
+      loadSettings(true);
+    };
+    loadSettings(false);
+    window.addEventListener('jk:settings-updated', handleSettingsUpdated);
     return () => {
       active = false;
-      window.removeEventListener('jk:settings-updated', loadSettings);
+      window.removeEventListener('jk:settings-updated', handleSettingsUpdated);
     };
   }, []);
 

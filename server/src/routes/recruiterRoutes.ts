@@ -12,14 +12,7 @@ import { isSafeHttpUrl, sanitizeUser, slugify } from '../utils/sanitize.ts';
 const router = Router();
 
 async function getOwnedCompanies(recruiterId: string, primaryCompanyId?: string): Promise<CompanyRecord[]> {
-  const all = await db.listCompanies();
-  const recId = String(recruiterId);
-  const primId = primaryCompanyId ? String(primaryCompanyId) : '';
-  return all.filter(
-    (c) =>
-      (c.ownerRecruiterId && String(c.ownerRecruiterId) === recId) ||
-      (primId !== '' && String(c._id) === primId)
-  );
+  return db.listOwnedCompanies(recruiterId, primaryCompanyId);
 }
 
 function isOwnedByRecruiter(company: CompanyRecord | null, recruiterId: string, primaryCompanyId?: string): boolean {
@@ -34,16 +27,12 @@ function isOwnedByRecruiter(company: CompanyRecord | null, recruiterId: string, 
 
 router.get('/dashboard', requireAuth, requireRole('recruiter'), async (req: AuthenticatedRequest, res) => {
   const recruiterId = req.user!._id;
-  const [jobs, applications, interviews, recProfile] = await Promise.all([
-    db.listJobs(),
-    db.listApplications(),
-    db.listInterviews(),
+  const [myJobs, myApps, myInterviews, recProfile] = await Promise.all([
+    db.listJobsByRecruiter(recruiterId),
+    db.listApplicationsByRecruiter(recruiterId),
+    db.listInterviewsByUser('recruiter', recruiterId),
     db.getRecruiterProfile(recruiterId),
   ]);
-
-  const myJobs = jobs.filter((j) => j.recruiterId === recruiterId);
-  const myApps = applications.filter((a) => a.recruiterId === recruiterId);
-  const myInterviews = interviews.filter((i) => i.recruiterId === recruiterId);
 
   const stats = {
     totalJobs: myJobs.length,
@@ -65,9 +54,13 @@ router.get('/dashboard', requireAuth, requireRole('recruiter'), async (req: Auth
     { name: 'Rejected', count: myApps.filter((a) => a.status === 'Rejected').length },
   ];
 
+  const appCountByJob = new Map<string, number>();
+  for (const a of myApps) {
+    appCountByJob.set(a.jobId, (appCountByJob.get(a.jobId) || 0) + 1);
+  }
   const applicationsByJob = myJobs.slice(0, 6).map((j) => ({
     jobTitle: j.title.length > 26 ? `${j.title.slice(0, 26)}...` : j.title,
-    applications: myApps.filter((a) => a.jobId === j._id).length,
+    applications: appCountByJob.get(j._id) || 0,
     views: j.viewsCount,
   }));
 
@@ -83,7 +76,7 @@ router.get('/dashboard', requireAuth, requireRole('recruiter'), async (req: Auth
 });
 
 router.get('/jobs', requireAuth, requireRole('recruiter'), async (req: AuthenticatedRequest, res) => {
-  const jobs = (await db.listJobs()).filter((j) => j.recruiterId === req.user!._id);
+  const jobs = await db.listJobsByRecruiter(req.user!._id);
   res.json({ success: true, data: jobs });
 });
 

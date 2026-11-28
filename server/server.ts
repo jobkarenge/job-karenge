@@ -4,23 +4,52 @@ import http from 'http';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { createExpressApp } from './src/app.ts';
-import { connectDatabase } from './src/config/db.ts';
+import { connectDatabase, syncDatabaseIndexes } from './src/config/db.ts';
 import { env } from './src/config/env.ts';
+import { verifyGmailSmtpConnection } from './src/services/emailService.ts';
 import { attachSocketIO } from './src/services/notificationService.ts';
 import { startBackgroundSchedulers } from './src/services/schedulerJobs.ts';
-import { ensureSeededDatabase } from './src/store/dataLayer.ts';
+import { db, ensureSeededDatabase } from './src/store/dataLayer.ts';
 import { verifyAccessToken } from './src/utils/tokens.ts';
+
+const allowedSocketOrigins = new Set(
+  [
+    ...env.clientUrl.split(',').map((s) => s.trim()),
+    env.serverUrl,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+  ].filter(Boolean)
+);
+
+function isSocketOriginAllowed(origin?: string): boolean {
+  if (!origin) return true;
+  if (allowedSocketOrigins.has(origin)) return true;
+  try {
+    const host = new URL(origin).hostname;
+    return (
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host.endsWith('.run.app') ||
+      host.endsWith('.netlify.app') ||
+      host.endsWith('.onrender.com')
+    );
+  } catch {
+    return false;
+  }
+}
 
 async function bootstrap() {
   await connectDatabase();
   await ensureSeededDatabase();
+  void syncDatabaseIndexes();
+  void db.warmPublicCaches().catch(() => {});
 
   const app = createExpressApp();
   const httpServer = http.createServer(app);
 
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: true,
+      origin: (origin, cb) => cb(null, isSocketOriginAllowed(origin)),
       credentials: true,
     },
   });
@@ -76,8 +105,23 @@ async function bootstrap() {
         : null;
 
     if (distDir) {
-      app.use(express.static(distDir));
+      app.use(
+        express.static(distDir, {
+          etag: true,
+          lastModified: true,
+          setHeaders: (res, filePath) => {
+            if (filePath.endsWith('.html')) {
+              res.setHeader('Cache-Control', 'no-cache');
+            } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+              res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+            } else {
+              res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+            }
+          },
+        })
+      );
       app.get('*', (_req, res) => {
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.join(distDir, 'index.html'));
       });
     } else {
@@ -93,6 +137,15 @@ async function bootstrap() {
 
   httpServer.listen(env.port, '0.0.0.0', () => {
     console.log(`[Job Karenge] Server listening on http://0.0.0.0:${env.port}`);
+    if (env.gmailUser && env.gmailAppPassword) {
+      void verifyGmailSmtpConnection().then((res) => {
+        if (res.ok) {
+          console.log(`[Job Karenge] Gmail SMTP verified (${res.host}:${res.port})`);
+        } else {
+          console.warn(`[Job Karenge] Gmail SMTP verification failed: ${res.error}`);
+        }
+      });
+    }
   });
 }
 

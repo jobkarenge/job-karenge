@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { EmptyState, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
-import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
+import { api, fetchCompanies, getApiErrorMessage, optimizeCloudinaryImageUrl } from '../../services/api';
 import type { Company, Job } from '../../types';
 import { formatSalaryRange } from '../../utils/formatters';
 
@@ -19,9 +19,8 @@ export function CompaniesPage() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
-    api
-      .get('/jobs/companies')
-      .then((res) => setCompanies(res.data.data || []))
+    fetchCompanies<Company>()
+      .then((list) => setCompanies(list))
       .finally(() => setLoading(false));
   }, []);
 
@@ -79,8 +78,11 @@ export function CompaniesPage() {
               {selectedDetail.company.bannerUrl && (
                 <div className="h-44 sm:h-52 w-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
                   <img
-                    src={resolveApiAssetUrl(selectedDetail.company.bannerUrl)}
+                    src={optimizeCloudinaryImageUrl(selectedDetail.company.bannerUrl, { width: 1200, height: 420, crop: 'fill' })}
                     alt={`${selectedDetail.company.name} banner`}
+                    width={1200}
+                    height={420}
+                    decoding="async"
                     referrerPolicy="no-referrer"
                     className="w-full h-full object-cover"
                   />
@@ -93,8 +95,11 @@ export function CompaniesPage() {
                     <div className="w-16 h-16 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 flex items-center justify-center overflow-hidden shrink-0">
                       {selectedDetail.company.logoUrl ? (
                         <img
-                          src={resolveApiAssetUrl(selectedDetail.company.logoUrl)}
+                          src={optimizeCloudinaryImageUrl(selectedDetail.company.logoUrl, { width: 128, height: 128, crop: 'fill' })}
                           alt={selectedDetail.company.name}
+                          width={64}
+                          height={64}
+                          decoding="async"
                           referrerPolicy="no-referrer"
                           className="w-full h-full object-cover"
                         />
@@ -270,7 +275,16 @@ export function CompaniesPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="w-12 h-12 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 flex items-center justify-center overflow-hidden">
                           {c.logoUrl ? (
-                            <img src={resolveApiAssetUrl(c.logoUrl)} alt={c.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                            <img
+                              src={optimizeCloudinaryImageUrl(c.logoUrl, { width: 96, height: 96, crop: 'fill' })}
+                              alt={c.name}
+                              width={48}
+                              height={48}
+                              loading="lazy"
+                              decoding="async"
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                            />
                           ) : (
                             <Building2 className="w-5 h-5" />
                           )}

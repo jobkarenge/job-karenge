@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { io, type Socket } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { toast } from 'sonner';
 import { api, getAccessToken, getBackendOrigin } from '../services/api';
 import type { AppNotification } from '../types';
@@ -78,41 +78,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       return;
     }
 
-    const socket: Socket = io(getBackendOrigin(), {
-      auth: (cb) => cb({ token: getAccessToken() }),
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-    });
+    let cancelled = false;
+    let socket: Socket | null = null;
 
     const connectIfToken = () => {
-      if (getAccessToken() && !socket.connected) {
+      if (socket && getAccessToken() && !socket.connected) {
         socket.connect();
       }
     };
 
-    socket.on('connect', () => {
-      setConnected(true);
-      refreshNotifications();
-    });
-    socket.on('disconnect', () => setConnected(false));
-    socket.on('connect_error', () => {
-      setConnected(false);
-    });
-    socket.on('notification:new', (incoming: AppNotification) => {
-      seenIdsRef.current.add(incoming._id);
-      setNotifications((prev) => {
-        if (prev.some((n) => n._id === incoming._id)) return prev;
-        return [incoming, ...prev];
-      });
-      setUnreadCount((c) => c + 1);
-      toast.info(incoming.title, { description: incoming.message });
-      window.dispatchEvent(new CustomEvent('jk:notification-received', { detail: incoming }));
-    });
-    socket.on('companies:updated', (payload: unknown) => {
-      window.dispatchEvent(new CustomEvent('jk:companies-updated', { detail: payload }));
-    });
-
     const handleTokenChange = () => {
+      if (!socket) return;
       if (getAccessToken()) {
         if (socket.connected) {
           socket.disconnect();
@@ -134,17 +110,49 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
     };
 
+    void import('socket.io-client').then(({ io }) => {
+      if (cancelled) return;
+      socket = io(getBackendOrigin(), {
+        auth: (cb) => cb({ token: getAccessToken() }),
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+      });
+
+      socket.on('connect', () => {
+        setConnected(true);
+        refreshNotifications();
+      });
+      socket.on('disconnect', () => setConnected(false));
+      socket.on('connect_error', () => {
+        setConnected(false);
+      });
+      socket.on('notification:new', (incoming: AppNotification) => {
+        seenIdsRef.current.add(incoming._id);
+        setNotifications((prev) => {
+          if (prev.some((n) => n._id === incoming._id)) return prev;
+          return [incoming, ...prev];
+        });
+        setUnreadCount((c) => c + 1);
+        toast.info(incoming.title, { description: incoming.message });
+        window.dispatchEvent(new CustomEvent('jk:notification-received', { detail: incoming }));
+      });
+      socket.on('companies:updated', (payload: unknown) => {
+        window.dispatchEvent(new CustomEvent('jk:companies-updated', { detail: payload }));
+      });
+    });
+
     window.addEventListener('jk:auth-token-changed', handleTokenChange);
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
     const pollInterval = window.setInterval(refreshNotifications, 15000);
 
     return () => {
+      cancelled = true;
       window.clearInterval(pollInterval);
       window.removeEventListener('jk:auth-token-changed', handleTokenChange);
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
-      socket.disconnect();
+      socket?.disconnect();
     };
   }, [user, refreshNotifications]);
 

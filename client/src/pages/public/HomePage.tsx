@@ -1,12 +1,11 @@
 import { ArrowRight, Building2, CheckCircle2, MapPin, Search } from 'lucide-react';
-import { motion } from 'motion/react';
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { EmptyState, SkeletonList } from '../../components/common/UIPrimitives';
 import { JobCard } from '../../components/jobs/JobCard';
 import { useAuth } from '../../context/AuthContext';
-import { api, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
+import { api, fetchSavedJobIds, getApiErrorMessage, invalidateSavedJobsCache, optimizeCloudinaryImageUrl } from '../../services/api';
 import type { Company, Job } from '../../types';
 
 interface CategoryItem {
@@ -15,6 +14,42 @@ interface CategoryItem {
   slug: string;
   description: string;
   openCount: number;
+}
+
+interface HomeSummaryPayload {
+  stats: {
+    activeJobs: number;
+    verifiedCompanies: number;
+    totalApplications: number;
+    registeredCandidates: number;
+  };
+  categories: CategoryItem[];
+  featuredJobs: Job[];
+  latestJobs: Job[];
+  companies: Company[];
+}
+
+let homeSummaryCache: { data: HomeSummaryPayload; expiresAt: number } | null = null;
+let homeSummaryInflight: Promise<HomeSummaryPayload> | null = null;
+
+async function fetchHomeSummary(): Promise<HomeSummaryPayload> {
+  if (homeSummaryCache && homeSummaryCache.expiresAt > Date.now()) {
+    return homeSummaryCache.data;
+  }
+  if (homeSummaryInflight) {
+    return homeSummaryInflight;
+  }
+  homeSummaryInflight = api
+    .get('/jobs/home')
+    .then((res) => {
+      const data = res.data.data as HomeSummaryPayload;
+      homeSummaryCache = { data, expiresAt: Date.now() + 20_000 };
+      return data;
+    })
+    .finally(() => {
+      homeSummaryInflight = null;
+    });
+  return homeSummaryInflight;
 }
 
 export function HomePage() {
@@ -27,30 +62,29 @@ export function HomePage() {
   const [newsletterEmail, setNewsletterEmail] = useState('');
   const [subscribing, setSubscribing] = useState(false);
 
-  const [stats, setStats] = useState({ activeJobs: 0, verifiedCompanies: 0, totalApplications: 0, registeredCandidates: 0 });
-  const [categories, setCategories] = useState<CategoryItem[]>([]);
-  const [featuredJobs, setFeaturedJobs] = useState<Job[]>([]);
-  const [latestJobs, setLatestJobs] = useState<Job[]>([]);
-  const [companies, setCompanies] = useState<Company[]>([]);
+  const initialCached =
+    homeSummaryCache && homeSummaryCache.expiresAt > Date.now() ? homeSummaryCache.data : null;
+
+  const [stats, setStats] = useState(
+    initialCached?.stats || { activeJobs: 0, verifiedCompanies: 0, totalApplications: 0, registeredCandidates: 0 }
+  );
+  const [categories, setCategories] = useState<CategoryItem[]>(initialCached?.categories || []);
+  const [featuredJobs, setFeaturedJobs] = useState<Job[]>(initialCached?.featuredJobs || []);
+  const [latestJobs, setLatestJobs] = useState<Job[]>(initialCached?.latestJobs || []);
+  const [companies, setCompanies] = useState<Company[]>(initialCached?.companies || []);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialCached);
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      api.get('/jobs/stats'),
-      api.get('/jobs/categories'),
-      api.get('/jobs/featured'),
-      api.get('/jobs?limit=6&sort=latest'),
-      api.get('/jobs/companies'),
-    ])
-      .then(([statsRes, catRes, featRes, latestRes, compRes]) => {
+    fetchHomeSummary()
+      .then((data) => {
         if (!active) return;
-        setStats(statsRes.data.data);
-        setCategories(catRes.data.data || []);
-        setFeaturedJobs(featRes.data.data || []);
-        setLatestJobs(latestRes.data.data?.items || []);
-        setCompanies(compRes.data.data || []);
+        setStats(data.stats);
+        setCategories(data.categories || []);
+        setFeaturedJobs(data.featuredJobs || []);
+        setLatestJobs(data.latestJobs || []);
+        setCompanies(data.companies || []);
       })
       .catch((err) => {
         if (active) {
@@ -68,13 +102,11 @@ export function HomePage() {
 
   useEffect(() => {
     if (user?.role === 'candidate') {
-      api
-        .get('/candidate/saved-jobs')
-        .then((res) => {
-          const ids = new Set<string>((res.data.data || []).map((item: { jobId: string }) => item.jobId));
-          setSavedIds(ids);
-        })
+      fetchSavedJobIds(user._id)
+        .then((ids) => setSavedIds(ids))
         .catch(() => {});
+    } else {
+      setSavedIds(new Set());
     }
   }, [user]);
 
@@ -98,6 +130,7 @@ export function HomePage() {
     }
     try {
       const res = await api.post(`/candidate/saved-jobs/${jobId}`);
+      invalidateSavedJobsCache();
       const saved = Boolean(res.data.data?.saved);
       setSavedIds((prev) => {
         const next = new Set(prev);
@@ -132,12 +165,7 @@ export function HomePage() {
       <section className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0F172A]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 lg:py-16">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.35 }}
-              className="lg:col-span-7 flex flex-col justify-center"
-            >
+            <div className="lg:col-span-7 flex flex-col justify-center">
               <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">
                 Verified Employers · Real-Time Application Tracking
               </p>
@@ -199,16 +227,23 @@ export function HomePage() {
                   Search
                 </button>
               </form>
-            </motion.div>
+            </div>
 
             <div className="lg:col-span-5">
-              <div className="h-full min-h-[280px] rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800">
-                <img
-                  src="/src/assets/images/hero_career_workspace_1795259228518.jpg"
-                  alt="Engineering and product teams collaborating in a sunlit modern office"
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                />
+              <div className="h-full min-h-[260px] aspect-[16/9] lg:aspect-auto rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800">
+                <picture className="block w-full h-full">
+                  <source srcSet="/src/assets/images/hero_career_workspace_1795259228518.webp" type="image/webp" />
+                  <img
+                    src="/src/assets/images/hero_career_workspace_1795259228518.jpg"
+                    alt="Engineering and product teams collaborating in a sunlit modern office"
+                    width={960}
+                    height={536}
+                    fetchPriority="high"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                </picture>
               </div>
             </div>
           </div>
@@ -343,7 +378,16 @@ export function HomePage() {
                   <div>
                     <div className="w-10 h-10 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800 flex items-center justify-center text-[#102A43] dark:text-slate-200 overflow-hidden">
                       {comp.logoUrl ? (
-                        <img src={resolveApiAssetUrl(comp.logoUrl)} alt={comp.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                        <img
+                          src={optimizeCloudinaryImageUrl(comp.logoUrl, { width: 80, height: 80, crop: 'fill' })}
+                          alt={comp.name}
+                          width={40}
+                          height={40}
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
                       ) : (
                         <Building2 className="w-5 h-5" />
                       )}
@@ -365,13 +409,20 @@ export function HomePage() {
       <section className="border-y border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0F172A]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 space-y-16">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-stretch">
-            <div className="lg:col-span-5 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
-              <img
-                src="/src/assets/images/candidate_career_growth_1795259227133.jpg"
-                alt="Software engineer building a career profile"
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover min-h-[260px]"
-              />
+            <div className="lg:col-span-5 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800">
+              <picture className="block w-full h-full">
+                <source srcSet="/src/assets/images/candidate_career_growth_1795259227133.webp" type="image/webp" />
+                <img
+                  src="/src/assets/images/candidate_career_growth_1795259227133.jpg"
+                  alt="Software engineer building a career profile"
+                  width={800}
+                  height={597}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover min-h-[260px]"
+                />
+              </picture>
             </div>
             <div className="lg:col-span-7 flex flex-col justify-center">
               <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
@@ -450,13 +501,20 @@ export function HomePage() {
                 </Link>
               </div>
             </div>
-            <div className="lg:col-span-5 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 order-1 lg:order-2">
-              <img
-                src="/src/assets/images/recruiter_hiring_team_1795259227054.jpg"
-                alt="Hiring managers reviewing candidate applications"
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover min-h-[260px]"
-              />
+            <div className="lg:col-span-5 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800 order-1 lg:order-2">
+              <picture className="block w-full h-full">
+                <source srcSet="/src/assets/images/recruiter_hiring_team_1795259227054.webp" type="image/webp" />
+                <img
+                  src="/src/assets/images/recruiter_hiring_team_1795259227054.jpg"
+                  alt="Hiring managers reviewing candidate applications"
+                  width={800}
+                  height={597}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover min-h-[260px]"
+                />
+              </picture>
             </div>
           </div>
         </div>

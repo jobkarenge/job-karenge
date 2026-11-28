@@ -19,10 +19,9 @@ function cleanEnvValue(value?: string): string {
   return value ? value.trim().replace(/^['"]|['"]$/g, '').trim() : '';
 }
 
-function cleanBrevoApiKey(value?: string): string {
+function cleanGmailAppPassword(value?: string): string {
   return cleanEnvValue(value)
-    .replace(/^BREVO_API_KEY\s*=\s*/i, '')
-    .replace(/^Bearer\s+/i, '')
+    .replace(/^GMAIL_APP_PASSWORD\s*=\s*/i, '')
     .replace(/^['"]|['"]$/g, '')
     .replace(/\s+/g, '')
     .trim();
@@ -95,14 +94,15 @@ export const env = {
   cloudinaryCloudName,
   cloudinaryApiKey,
   cloudinaryApiSecret,
-  brevoApiKey: cleanBrevoApiKey(process.env.BREVO_API_KEY),
-  brevoSenderEmail:
-    cleanEnvValue(process.env.BREVO_SENDER_EMAIL).replace(/^BREVO_SENDER_EMAIL\s*=\s*/i, '').trim() ||
+  emailProvider: cleanEnvValue(process.env.EMAIL_PROVIDER) || 'gmail',
+  gmailUser: cleanEnvValue(process.env.GMAIL_USER).replace(/^GMAIL_USER\s*=\s*/i, '').trim(),
+  gmailAppPassword: cleanGmailAppPassword(process.env.GMAIL_APP_PASSWORD),
+  emailFromName:
+    cleanEnvValue(process.env.EMAIL_FROM_NAME).replace(/^EMAIL_FROM_NAME\s*=\s*/i, '').trim() || 'Job Karenge',
+  emailFromEmail:
+    cleanEnvValue(process.env.EMAIL_FROM_EMAIL).replace(/^EMAIL_FROM_EMAIL\s*=\s*/i, '').trim() ||
+    cleanEnvValue(process.env.GMAIL_USER).replace(/^GMAIL_USER\s*=\s*/i, '').trim() ||
     'jobkarenge.support@gmail.com',
-  brevoSenderName:
-    cleanEnvValue(process.env.BREVO_SENDER_NAME).replace(/^BREVO_SENDER_NAME\s*=\s*/i, '').trim() || 'Job Karenge',
-  brevoBaseUrl: cleanBaseUrl(process.env.BREVO_BASE_URL) || 'https://api.brevo.com/v3',
-  brevoWebhookSecret: cleanEnvValue(process.env.BREVO_WEBHOOK_SECRET),
 };
 
 const missingCloudinaryVars: string[] = [];
@@ -128,7 +128,7 @@ export const cloudinaryMeta = {
 export const integrationStatus = {
   mongodbConfigured: Boolean(env.mongodbUri),
   cloudinaryConfigured: cloudinaryMeta.configured,
-  brevoConfigured: Boolean(env.brevoApiKey),
+  emailConfigured: Boolean(env.gmailUser && env.gmailAppPassword),
 };
 
 export function resolveRequestOrigin(req?: Pick<Request, 'headers' | 'protocol' | 'get'>): string | undefined {

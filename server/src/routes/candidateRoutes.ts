@@ -31,18 +31,32 @@ function calculateCompletion(user: { name: string; phone: string; profileImage: 
 
 router.get('/dashboard', requireAuth, requireRole('candidate'), async (req: AuthenticatedRequest, res) => {
   const userId = req.user!._id;
-  const [applications, saved, interviews, allJobs, companies, profile] = await Promise.all([
-    db.listApplications(),
+  const [myApps, saved, myInterviews, profile, recentPool] = await Promise.all([
+    db.listApplicationsByCandidate(userId),
     db.listSavedJobs(userId),
-    db.listInterviews(),
-    db.listJobs(),
-    db.listCompanies(),
+    db.listInterviewsByUser('candidate', userId),
     db.getCandidateProfile(userId),
+    db.queryPublishedJobs({ limit: 24, sort: 'latest', page: 1 }),
   ]);
 
-  const myApps = applications.filter((a) => a.candidateId === userId);
-  const jobMap = new Map(allJobs.map((j) => [j._id, j]));
-  const companyMap = new Map(companies.map((c) => [c._id, c]));
+  const recentAppsSlice = myApps.slice(0, 5);
+  const upcomingInterviewsSlice = myInterviews
+    .filter((i) => i.status === 'Scheduled' || i.status === 'Rescheduled')
+    .slice(0, 5);
+
+  const referencedJobIds = [
+    ...recentAppsSlice.map((a) => a.jobId),
+    ...upcomingInterviewsSlice.map((i) => i.jobId),
+  ];
+  const referencedCompanyIds = recentAppsSlice.map((a) => a.companyId);
+
+  const [referencedJobs, referencedCompanies] = await Promise.all([
+    db.listJobsByIds(referencedJobIds),
+    db.listCompaniesByIds(referencedCompanyIds),
+  ]);
+
+  const jobMap = new Map(referencedJobs.map((j) => [j._id, j]));
+  const companyMap = new Map(referencedCompanies.map((c) => [c._id, c]));
 
   const stats = {
     totalApplications: myApps.length,
@@ -54,34 +68,27 @@ router.get('/dashboard', requireAuth, requireRole('candidate'), async (req: Auth
     savedJobs: saved.length,
   };
 
-  const recentApplications = myApps.slice(0, 5).map((a) => ({
+  const recentApplications = recentAppsSlice.map((a) => ({
     ...a,
     job: jobMap.get(a.jobId) || null,
     company: companyMap.get(a.companyId) || null,
   }));
 
-  const upcomingInterviews = interviews
-    .filter((i) => i.candidateId === userId && (i.status === 'Scheduled' || i.status === 'Rescheduled'))
-    .slice(0, 5)
-    .map((i) => ({ ...i, job: jobMap.get(i.jobId) || null }));
+  const upcomingInterviews = upcomingInterviewsSlice.map((i) => ({
+    ...i,
+    job: jobMap.get(i.jobId) || null,
+  }));
 
   const candidateSkills = new Set((profile?.technicalSkills || []).map((s) => s.name.toLowerCase()));
   const appliedIds = new Set(myApps.map((a) => a.jobId));
-  const now = Date.now();
-  const recommendedJobs = allJobs
-    .filter(
-      (j) =>
-        j.status === 'published' &&
-        (!j.applicationDeadline || new Date(j.applicationDeadline).getTime() >= now) &&
-        !appliedIds.has(j._id)
-    )
+  const recommendedJobs = recentPool.items
+    .filter((j) => !appliedIds.has(j._id))
     .sort((a, b) => {
       const overlapA = a.skills.filter((s) => candidateSkills.has(s.toLowerCase())).length;
       const overlapB = b.skills.filter((s) => candidateSkills.has(s.toLowerCase())).length;
       return overlapB - overlapA || Number(b.featured) - Number(a.featured);
     })
-    .slice(0, 4)
-    .map((j) => ({ ...j, company: companyMap.get(j.companyId) || null }));
+    .slice(0, 4);
 
   res.json({
     success: true,
@@ -270,11 +277,12 @@ router.delete('/resume', requireAuth, requireRole('candidate'), async (req: Auth
 });
 
 router.get('/saved-jobs', requireAuth, requireRole('candidate'), async (req: AuthenticatedRequest, res) => {
-  const [saved, jobs, companies] = await Promise.all([
-    db.listSavedJobs(req.user!._id),
-    db.listJobs(),
-    db.listCompanies(),
-  ]);
+  const saved = await db.listSavedJobs(req.user!._id);
+  if (saved.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+  const jobs = await db.listJobsByIds(saved.map((s) => s.jobId));
+  const companies = await db.listCompaniesByIds(jobs.map((j) => j.companyId));
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const companyMap = new Map(companies.map((c) => [c._id, c]));
 

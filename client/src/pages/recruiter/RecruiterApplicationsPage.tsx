@@ -21,11 +21,11 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { EmptyState, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
-import { api, getAccessToken, getApiErrorMessage, resolveApiAssetUrl } from '../../services/api';
+import { EmptyState, PaginationControls, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
+import { api, getAccessToken, getApiErrorMessage, optimizeCloudinaryImageUrl, resolveApiAssetUrl } from '../../services/api';
 import type { Application, ApplicationStatus, Company, Job } from '../../types';
 import { formatSalaryRange, formatShortDate } from '../../utils/formatters';
 
@@ -80,6 +80,8 @@ export function RecruiterApplicationsPage() {
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
   const [q, setQ] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
   const [activeApp, setActiveApp] = useState<Application | null>(null);
   const [statusForm, setStatusForm] = useState({
@@ -138,10 +140,24 @@ export function RecruiterApplicationsPage() {
     }
   }, [companyId, jobId, q]);
 
+  const hasMountedRef = useRef(false);
+  const prevQueryRef = useRef(q);
+
   useEffect(() => {
-    const t = setTimeout(loadApplications, 200);
+    const searchChanged = hasMountedRef.current && prevQueryRef.current !== q;
+    prevQueryRef.current = q;
+
+    if (!hasMountedRef.current || !searchChanged) {
+      hasMountedRef.current = true;
+      void loadApplications();
+      return;
+    }
+
+    const t = setTimeout(() => {
+      void loadApplications();
+    }, 200);
     return () => clearTimeout(t);
-  }, [loadApplications]);
+  }, [loadApplications, q]);
 
   const stageCounts = useMemo(() => {
     const counts: Record<string, number> = {
@@ -163,6 +179,17 @@ export function RecruiterApplicationsPage() {
     if (!statusFilter) return allApplications;
     return allApplications.filter((app) => app.status === statusFilter);
   }, [allApplications, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(applications.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const paginatedApplications = useMemo(
+    () => applications.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [applications, currentPage]
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [companyId, jobId, statusFilter, q]);
 
   const filteredJobOptions = useMemo(() => {
     if (!companyId) return jobs;
@@ -263,7 +290,7 @@ export function RecruiterApplicationsPage() {
       const { emailStatus, emailError } = res.data || {};
       if (emailStatus === 'failed') {
         toast.warning(
-          `Interview ${isReschedule ? 'rescheduled' : 'scheduled'} & candidate notified in-app, but email failed: ${emailError || 'Check Brevo sender configuration.'}`
+          `Interview ${isReschedule ? 'rescheduled' : 'scheduled'} & candidate notified in-app, but email failed: ${emailError || 'Check Gmail SMTP sender configuration.'}`
         );
       } else if (emailStatus === 'simulated') {
         toast.success(
@@ -513,7 +540,7 @@ export function RecruiterApplicationsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {applications.map((app) => {
+              {paginatedApplications.map((app) => {
                 const candidateLocation = getCandidateLocation(app);
                 const companyName = getCompanyName(app);
                 const expYears = app.candidateProfile?.totalExperienceYears ?? 0;
@@ -562,8 +589,12 @@ export function RecruiterApplicationsPage() {
                       <div className="flex items-center gap-2.5 min-w-[140px]">
                         {app.company?.logoUrl ? (
                           <img
-                            src={resolveApiAssetUrl(app.company.logoUrl)}
+                            src={optimizeCloudinaryImageUrl(app.company.logoUrl, { width: 56, height: 56, crop: 'fill' })}
                             alt={companyName}
+                            width={28}
+                            height={28}
+                            loading="lazy"
+                            decoding="async"
                             referrerPolicy="no-referrer"
                             className="w-7 h-7 rounded-md object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-white"
                           />
@@ -661,6 +692,13 @@ export function RecruiterApplicationsPage() {
               })}
             </tbody>
           </table>
+          <PaginationControls
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={applications.length}
+            pageSize={pageSize}
+            onPageChange={setPage}
+          />
         </div>
       )}
 

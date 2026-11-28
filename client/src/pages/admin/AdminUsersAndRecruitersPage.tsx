@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
+import { PaginationControls, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { api, getApiErrorMessage } from '../../services/api';
 import type { Company, RecruiterProfile, User } from '../../types';
 
@@ -22,6 +22,9 @@ export function AdminUsersAndRecruitersPage() {
   const [recruiters, setRecruiters] = useState<RecruiterRow[]>([]);
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [recruiterPage, setRecruiterPage] = useState(1);
+  const [userPage, setUserPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const load = () => {
     setLoading(true);
@@ -57,11 +60,24 @@ export function AdminUsersAndRecruitersPage() {
     }
   };
 
+  useEffect(() => {
+    setRecruiterPage(1);
+    setUserPage(1);
+  }, [tab, roleFilter, statusFilter]);
+
   const pendingRecruiters = recruiters.filter((r) => r.verificationStatus === 'pending');
   const visibleRecruiters = statusFilter
     ? recruiters.filter((r) => r.verificationStatus === statusFilter)
     : pendingRecruiters;
   const visibleUsers = roleFilter ? users.filter((u) => u.role === roleFilter) : users;
+
+  const recruiterTotalPages = Math.max(1, Math.ceil(visibleRecruiters.length / PAGE_SIZE));
+  const safeRecruiterPage = Math.min(recruiterPage, recruiterTotalPages);
+  const pagedRecruiters = visibleRecruiters.slice((safeRecruiterPage - 1) * PAGE_SIZE, safeRecruiterPage * PAGE_SIZE);
+
+  const userTotalPages = Math.max(1, Math.ceil(visibleUsers.length / PAGE_SIZE));
+  const safeUserPage = Math.min(userPage, userTotalPages);
+  const pagedUsers = visibleUsers.slice((safeUserPage - 1) * PAGE_SIZE, safeUserPage * PAGE_SIZE);
 
   if (loading) return <SkeletonList rows={4} />;
 
@@ -128,7 +144,7 @@ export function AdminUsersAndRecruitersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {visibleRecruiters.map((r) => (
+              {pagedRecruiters.map((r) => (
                 <tr key={r._id}>
                   <td className="py-3.5 px-4">
                     <p className="font-semibold">{r.user?.name || 'Recruiter'}</p>
@@ -172,6 +188,13 @@ export function AdminUsersAndRecruitersPage() {
               )}
             </tbody>
           </table>
+          <PaginationControls
+            page={safeRecruiterPage}
+            totalPages={recruiterTotalPages}
+            totalItems={visibleRecruiters.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setRecruiterPage}
+          />
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-x-auto">
@@ -186,7 +209,7 @@ export function AdminUsersAndRecruitersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {visibleUsers.map((u) => (
+              {pagedUsers.map((u) => (
                 <tr key={u._id}>
                   <td className="py-3.5 px-4">
                     <p className="font-semibold">{u.name}</p>
@@ -244,6 +267,13 @@ export function AdminUsersAndRecruitersPage() {
               )}
             </tbody>
           </table>
+          <PaginationControls
+            page={safeUserPage}
+            totalPages={userTotalPages}
+            totalItems={visibleUsers.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setUserPage}
+          />
         </div>
       )}
     </div>

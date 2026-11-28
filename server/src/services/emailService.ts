@@ -1,4 +1,8 @@
-import { getEffectiveEmailConfig, getEmailDiagnostics } from '../config/brevo.ts';
+import {
+  getEffectiveEmailConfig,
+  getEmailDiagnostics,
+  verifyGmailSmtpConnection,
+} from '../config/mailer.ts';
 import { db } from '../store/dataLayer.ts';
 import { buildApplicationConfirmationTemplate, buildGenericStatusUpdateTemplate } from '../templates/applicationEmail.ts';
 import { buildInterviewEmailTemplate } from '../templates/interviewEmail.ts';
@@ -11,21 +15,22 @@ import {
   buildPasswordResetTemplate,
   buildWelcomeEmailTemplate,
 } from '../templates/welcomeEmail.ts';
-import type { EmailCampaignRecord, EmailLogRecord, JobRecord, UserRecord } from '../types/domain.ts';
-import {
-  ensureBrevoList,
-  sendBrevoTransactionalEmail,
-  syncContactToBrevo,
-  verifyBrevoAccount,
-} from './brevoService.ts';
+import type { EmailCampaignRecord, JobRecord, UserRecord } from '../types/domain.ts';
 import {
   createUnsubscribeToken,
   htmlToPlainText,
   renderBrandedEmail,
   verifyUnsubscribeToken,
 } from './emailTemplateService.ts';
+import { sendGmailSmtpEmail } from './gmailSmtpService.ts';
 
-export { createUnsubscribeToken, getEffectiveEmailConfig, getEmailDiagnostics, verifyUnsubscribeToken };
+export {
+  createUnsubscribeToken,
+  getEffectiveEmailConfig,
+  getEmailDiagnostics,
+  verifyGmailSmtpConnection,
+  verifyUnsubscribeToken,
+};
 
 export async function dispatchEmail(params: {
   to: string;
@@ -52,8 +57,16 @@ export async function dispatchEmail(params: {
   if (params.dedupeKey) {
     const existing = await db.findEmailLogByDedupeKey(params.dedupeKey);
     if (existing) {
+      const normalizedStatus =
+        existing.status === 'delivered'
+          ? 'delivered'
+          : existing.status === 'sent'
+            ? 'sent'
+            : existing.status === 'simulated'
+              ? 'simulated'
+              : 'queued';
       return {
-        status: existing.status === 'delivered' ? 'delivered' : existing.status === 'simulated' ? 'simulated' : 'queued',
+        status: normalizedStatus,
         accepted: existing.status !== 'failed',
         messageId: existing.messageId,
       };
@@ -104,43 +117,42 @@ export async function dispatchEmail(params: {
     .filter(Boolean)
     .join('\n');
 
-  if (cfg.apiKey) {
+  if (cfg.gmailUser && cfg.gmailAppPassword) {
     const headers: Record<string, string> = {};
     if (unsubscribeUrl) {
       headers['List-Unsubscribe'] = `<${unsubscribeUrl}>`;
     }
 
-    const res = await sendBrevoTransactionalEmail({
+    const res = await sendGmailSmtpEmail({
       toEmail: recipient,
       toName: params.toName,
       subject: params.subject,
       htmlContent: html,
       textContent: text,
-      tags: [params.type, params.templateName],
       headers,
     });
 
     if (res.accepted) {
-      // Mark as 'queued' (accepted by Brevo API). Actual 'delivered' state is promoted only via Brevo webhook events.
       await db.createEmailLog({
         recipientEmail: recipient,
         recipientUserId: params.userId,
         type: params.type,
         templateName: params.templateName,
         subject: params.subject,
-        status: 'queued',
-        provider: 'brevo',
-        brevoEvent: 'api_accepted',
+        status: 'sent',
+        provider: 'gmail_smtp',
+        smtpEvent: 'smtp_accepted',
+        deliveredAt: new Date().toISOString(),
         campaignId: params.campaignId || '',
         jobId: params.jobId || '',
         dedupeKey: params.dedupeKey || '',
         messageId: res.messageId,
         htmlPreview: html,
       });
-      return { status: 'queued', accepted: true, messageId: res.messageId };
+      return { status: 'sent', accepted: true, messageId: res.messageId };
     }
 
-    console.warn(`[Email][Brevo] Dispatch failed (${params.templateName} -> ${recipient}): ${res.error}`);
+    console.warn(`[Email][Gmail SMTP] Dispatch failed (${params.templateName} -> ${recipient}): ${res.error}`);
     await db.createEmailLog({
       recipientEmail: recipient,
       recipientUserId: params.userId,
@@ -148,19 +160,19 @@ export async function dispatchEmail(params: {
       templateName: params.templateName,
       subject: params.subject,
       status: 'failed',
-      provider: 'brevo',
-      brevoEvent: 'api_rejected',
+      provider: 'gmail_smtp',
+      smtpEvent: 'smtp_rejected',
       campaignId: params.campaignId || '',
       jobId: params.jobId || '',
       dedupeKey: params.dedupeKey || '',
       messageId: '',
-      error: res.error || 'Brevo API rejected request',
+      error: res.error || 'Gmail SMTP rejected request',
       htmlPreview: html,
     });
     return { status: 'failed', accepted: false, messageId: '', error: res.error };
   }
 
-  // BREVO_API_KEY not configured: record log preview transparently without claiming Brevo acceptance/delivery
+  // GMAIL_USER / GMAIL_APP_PASSWORD not configured: log preview transparently without claiming SMTP delivery
   const simId = `preview-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   await db.createEmailLog({
     recipientEmail: recipient,
@@ -169,8 +181,8 @@ export async function dispatchEmail(params: {
     templateName: params.templateName,
     subject: params.subject,
     status: 'simulated',
-    provider: 'brevo',
-    brevoEvent: 'not_configured_preview',
+    provider: 'gmail_smtp',
+    smtpEvent: 'not_configured_preview',
     campaignId: params.campaignId || '',
     jobId: params.jobId || '',
     dedupeKey: params.dedupeKey || '',
@@ -187,9 +199,6 @@ export async function sendWelcomeEmail(
   const { clientUrl } = getEffectiveEmailConfig();
   const verifyUrl = `${clientUrl}/verify-email?token=${encodeURIComponent(verificationToken)}`;
   const tpl = buildWelcomeEmailTemplate({ name: user.name, role: user.role, verifyUrl });
-
-  // Sync newly registered user to Brevo contacts asynchronously (non-blocking)
-  syncCandidateContactToBrevo(user._id).catch(() => {});
 
   return dispatchEmail({
     to: user.email,
@@ -403,53 +412,6 @@ export async function sendPromotionalDigest(params: {
   });
 }
 
-export async function syncCandidateContactToBrevo(userId: string): Promise<{ synced: boolean; error?: string }> {
-  const cfg = getEffectiveEmailConfig();
-  if (!cfg.apiKey) return { synced: false, error: 'BREVO_API_KEY not configured' };
-
-  const user = await db.findUserById(userId);
-  if (!user) return { synced: false, error: 'User not found' };
-
-  const pref = await db.getEmailPreference(userId);
-  const profile = user.role === 'candidate' ? await db.getCandidateProfile(userId) : null;
-  const optedOut = !pref.promotionalEmails || Boolean(pref.unsubscribedAt);
-
-  const subscribedListId = await ensureBrevoList('Job Karenge Subscribed Candidates');
-  const dailyListId = pref.dailyJobAlerts && !optedOut ? await ensureBrevoList('Job Karenge Daily Alerts') : null;
-  const weeklyListId = pref.weeklyJobAlerts && !optedOut ? await ensureBrevoList('Job Karenge Weekly Alerts') : null;
-
-  const listIds = [
-    ...(!optedOut && subscribedListId ? [subscribedListId] : []),
-    ...(dailyListId ? [dailyListId] : []),
-    ...(weeklyListId ? [weeklyListId] : []),
-  ];
-  const unlinkListIds = optedOut && subscribedListId ? [subscribedListId] : undefined;
-
-  const res = await syncContactToBrevo({
-    email: user.email,
-    name: user.name,
-    promotionalOptOut: optedOut,
-    listIds,
-    unlinkListIds,
-    attributes: {
-      ROLE: user.role,
-      LOCATION: profile?.currentLocation || user.location || '',
-      PREF_CATEGORIES: pref.preferredCategories.join(', '),
-      PREF_LOCATIONS: pref.preferredLocations.join(', '),
-      DAILY_ALERTS: Boolean(pref.dailyJobAlerts && !optedOut),
-      WEEKLY_ALERTS: Boolean(pref.weeklyJobAlerts && !optedOut),
-      NEW_JOB_ALERTS: Boolean(pref.newJobNotifications && !optedOut),
-      FEATURED_ALERTS: Boolean(pref.featuredJobAnnouncements && !optedOut),
-      PROMOTIONAL_OPT_IN: !optedOut,
-    },
-  });
-
-  if (res.synced) {
-    await db.updateEmailPreference(userId, { brevoSyncedAt: new Date().toISOString() });
-  }
-  return res;
-}
-
 export function matchJobsForCandidate(params: {
   jobs: JobRecord[];
   candidateProfile: Awaited<ReturnType<typeof db.getCandidateProfile>>;
@@ -500,7 +462,7 @@ export async function recomputeCampaignStatsFromLogs(campaignId: string): Promis
   const logs = await db.listEmailLogsByCampaign(campaignId);
   if (logs.length === 0) return campaign;
 
-  const delivered = logs.filter((l) => l.status === 'delivered').length;
+  const sentAndDelivered = logs.filter((l) => l.status === 'sent' || l.status === 'delivered').length;
   const failed = logs.filter((l) => l.status === 'failed').length;
   const bounced = logs.filter((l) => l.status === 'bounced').length;
   const accepted = logs.filter((l) => l.status === 'queued' || l.status === 'sent' || l.status === 'delivered').length;
@@ -510,7 +472,7 @@ export async function recomputeCampaignStatsFromLogs(campaignId: string): Promis
     stats: {
       sent: campaign.stats.sent || logs.length,
       accepted,
-      delivered: Math.max(campaign.stats.delivered || 0, delivered),
+      delivered: Math.max(campaign.stats.delivered || 0, sentAndDelivered),
       failed: Math.max(campaign.stats.failed || 0, failed),
       bounced: Math.max(campaign.stats.bounced || 0, bounced),
       unsubscribed: campaign.stats.unsubscribed || 0,
@@ -519,97 +481,3 @@ export async function recomputeCampaignStatsFromLogs(campaignId: string): Promis
     },
   });
 }
-
-export interface BrevoWebhookPayload {
-  event?: string;
-  email?: string;
-  'message-id'?: string;
-  messageId?: string;
-  camp_id?: number;
-  reason?: string;
-  date?: string;
-}
-
-export async function processBrevoWebhookEvent(payload: BrevoWebhookPayload): Promise<{
-  handled: boolean;
-  updatedLogId?: string;
-  event?: string;
-}> {
-  const event = String(payload.event || '').toLowerCase();
-  const messageId = String(payload['message-id'] || payload.messageId || '').trim();
-  const recipientEmail = String(payload.email || '').trim().toLowerCase();
-
-  let updatedLog: EmailLogRecord | null = null;
-  if (messageId) {
-    const existingLog = await db.findEmailLogByMessageId(messageId);
-    if (existingLog) {
-      const patch: Partial<EmailLogRecord> = { brevoEvent: event };
-      if (event === 'delivered') {
-        patch.status = 'delivered';
-        patch.deliveredAt = new Date().toISOString();
-      } else if (event === 'soft_bounce' || event === 'hard_bounce' || event === 'blocked' || event === 'invalid_email') {
-        patch.status = 'bounced';
-        patch.error = payload.reason || `Brevo webhook event: ${event}`;
-      } else if (event === 'error') {
-        patch.status = 'failed';
-        patch.error = payload.reason || 'Brevo delivery error';
-      }
-      updatedLog = await db.updateEmailLog(existingLog._id, patch);
-
-      if (existingLog.campaignId) {
-        const campaign = await db.findEmailCampaignById(existingLog.campaignId);
-        if (campaign) {
-          const stats = { ...campaign.stats };
-          if (event === 'delivered') stats.delivered = (stats.delivered || 0) + 1;
-          if (event === 'soft_bounce' || event === 'hard_bounce') stats.bounced = (stats.bounced || 0) + 1;
-          if (event === 'unique_opened' || event === 'opened') stats.opened = (stats.opened || 0) + 1;
-          if (event === 'click') stats.clicked = (stats.clicked || 0) + 1;
-          if (event === 'unsubscribed' || event === 'spam') stats.unsubscribed = (stats.unsubscribed || 0) + 1;
-          await db.updateEmailCampaign(campaign._id, {
-            stats,
-            lastStatsSyncAt: new Date().toISOString(),
-          });
-        }
-      }
-    }
-  }
-
-  if (payload.camp_id) {
-    const camp = await db.findEmailCampaignByBrevoId(Number(payload.camp_id));
-    if (camp) {
-      const stats = { ...camp.stats };
-      if (event === 'delivered') stats.delivered = (stats.delivered || 0) + 1;
-      if (event === 'soft_bounce' || event === 'hard_bounce') stats.bounced = (stats.bounced || 0) + 1;
-      if (event === 'unique_opened' || event === 'opened') stats.opened = (stats.opened || 0) + 1;
-      if (event === 'click') stats.clicked = (stats.clicked || 0) + 1;
-      if (event === 'unsubscribed' || event === 'spam') stats.unsubscribed = (stats.unsubscribed || 0) + 1;
-      await db.updateEmailCampaign(camp._id, {
-        stats,
-        lastStatsSyncAt: new Date().toISOString(),
-      });
-    }
-  }
-
-  // Propagate unsubscribe / spam complaints back to candidate preferences
-  if ((event === 'unsubscribed' || event === 'spam') && recipientEmail) {
-    const user = await db.findUserByEmail(recipientEmail);
-    if (user) {
-      await db.updateEmailPreference(user._id, {
-        promotionalEmails: false,
-        dailyJobAlerts: false,
-        weeklyJobAlerts: false,
-        newJobNotifications: false,
-        featuredJobAnnouncements: false,
-        unsubscribedAt: new Date().toISOString(),
-      });
-    }
-  }
-
-  return {
-    handled: Boolean(event),
-    updatedLogId: updatedLog?._id,
-    event,
-  };
-}
-
-export { verifyBrevoAccount };

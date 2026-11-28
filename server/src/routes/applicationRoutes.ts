@@ -73,18 +73,22 @@ router.post('/', requireAuth, requireRole('candidate'), async (req: Authenticate
     appliedAt: now,
   });
 
-  await db.updateJob(job._id, { applicationsCount: (job.applicationsCount || 0) + 1 });
+  await Promise.all([
+    db.updateJob(job._id, { applicationsCount: (job.applicationsCount || 0) + 1 }),
+    job.recruiterId && job.recruiterId !== 'system-catalog'
+      ? pushNotification({
+          userId: job.recruiterId,
+          type: 'new_application',
+          title: 'New Candidate Application',
+          message: `${req.user!.name} applied for ${job.title}.`,
+          link: '/recruiter/applications',
+        })
+      : Promise.resolve(),
+  ]);
 
-  await sendApplicationConfirmationEmail({ candidate: req.user!, job });
-  if (job.recruiterId && job.recruiterId !== 'system-catalog') {
-    await pushNotification({
-      userId: job.recruiterId,
-      type: 'new_application',
-      title: 'New Candidate Application',
-      message: `${req.user!.name} applied for ${job.title}.`,
-      link: '/recruiter/applications',
-    });
-  }
+  void sendApplicationConfirmationEmail({ candidate: req.user!, job }).catch((err) =>
+    console.error('[Application] Confirmation email dispatch warning:', err)
+  );
 
   res.status(201).json({
     success: true,
@@ -115,27 +119,32 @@ function buildInterviewByAppMap<T extends { applicationId: string; status: strin
 }
 
 router.get('/my-applications', requireAuth, requireRole('candidate'), async (req: AuthenticatedRequest, res) => {
-  const [applications, jobs, companies, interviews] = await Promise.all([
-    db.listApplications(),
-    db.listJobs(),
-    db.listCompanies(),
-    db.listInterviews(),
+  const [mine, interviews] = await Promise.all([
+    db.listApplicationsByCandidate(req.user!._id),
+    db.listInterviewsByUser('candidate', req.user!._id),
+  ]);
+
+  if (mine.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+
+  const [jobs, companies] = await Promise.all([
+    db.listJobsByIds(mine.map((a) => a.jobId)),
+    db.listCompaniesByIds(mine.map((a) => a.companyId)),
   ]);
 
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const companyMap = new Map(companies.map((c) => [c._id, c]));
   const interviewByApp = buildInterviewByAppMap(interviews);
 
-  const mine = applications
-    .filter((a) => a.candidateId === req.user!._id)
-    .map((a) => ({
-      ...a,
-      job: jobMap.get(a.jobId) || null,
-      company: companyMap.get(a.companyId) || null,
-      interview: interviewByApp.get(a._id) || null,
-    }));
+  const enriched = mine.map((a) => ({
+    ...a,
+    job: jobMap.get(a.jobId) || null,
+    company: companyMap.get(a.companyId) || null,
+    interview: interviewByApp.get(a._id) || null,
+  }));
 
-  res.json({ success: true, data: mine });
+  res.json({ success: true, data: enriched });
 });
 
 router.patch('/:id/withdraw', requireAuth, requireRole('candidate'), async (req: AuthenticatedRequest, res) => {
@@ -181,40 +190,51 @@ async function listRecruiterApplications(req: AuthenticatedRequest, res: import(
   const companyFilter = String(req.query.companyId || '');
   const q = String(req.query.q || '').trim().toLowerCase();
 
-  const [applications, jobs, companies, users, interviews] = await Promise.all([
-    db.listApplications(),
-    db.listJobs(),
-    db.listCompanies(),
-    db.listUsers(),
-    db.listInterviews(),
+  const scopedRecruiterId = req.user!.role === 'admin' ? null : req.user!._id;
+  const [list, interviews] = await Promise.all([
+    db.listApplicationsByRecruiter(scopedRecruiterId, {
+      status: statusFilter || undefined,
+      jobId: jobFilter || undefined,
+      companyId: companyFilter || undefined,
+    }),
+    db.listInterviewsByUser(req.user!.role, req.user!._id),
+  ]);
+
+  if (list.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+
+  const jobIds = list.map((a) => a.jobId);
+  const candidateIds = list.map((a) => a.candidateId);
+  const jobs = await db.listJobsByIds(jobIds);
+  const companyIds = [...list.map((a) => a.companyId), ...jobs.map((j) => j.companyId)];
+
+  const [companies, users, profiles] = await Promise.all([
+    db.listCompaniesByIds(companyIds),
+    db.listUsersByIds(candidateIds),
+    db.listCandidateProfilesByUserIds(candidateIds),
   ]);
 
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const companyMap = new Map(companies.map((c) => [c._id, c]));
   const userMap = new Map(users.map((u) => [u._id, sanitizeUser(u)]));
+  const profileMap = new Map(profiles.map((p) => [p.userId, p]));
   const interviewMap = buildInterviewByAppMap(interviews);
 
-  let list = applications.filter((a) => req.user!.role === 'admin' || a.recruiterId === req.user!._id);
-  if (statusFilter) list = list.filter((a) => a.status === statusFilter);
-  if (jobFilter) list = list.filter((a) => a.jobId === jobFilter);
-  if (companyFilter) list = list.filter((a) => a.companyId === companyFilter);
-
-  const enriched = await Promise.all(
-    list.map(async (a) => {
-      const candidate = userMap.get(a.candidateId) || null;
-      const candidateProfile = await db.getCandidateProfile(a.candidateId);
-      const job = jobMap.get(a.jobId) || null;
-      const company = companyMap.get(a.companyId) || (job?.companyId ? companyMap.get(job.companyId) || null : null);
-      return {
-        ...a,
-        candidate,
-        candidateProfile,
-        job,
-        company,
-        interview: interviewMap.get(a._id) || null,
-      };
-    })
-  );
+  const enriched = list.map((a) => {
+    const candidate = userMap.get(a.candidateId) || null;
+    const candidateProfile = profileMap.get(a.candidateId) || null;
+    const job = jobMap.get(a.jobId) || null;
+    const company = companyMap.get(a.companyId) || (job?.companyId ? companyMap.get(job.companyId) || null : null);
+    return {
+      ...a,
+      candidate,
+      candidateProfile,
+      job,
+      company,
+      interview: interviewMap.get(a._id) || null,
+    };
+  });
 
   const final = q
     ? enriched.filter(
@@ -403,23 +423,23 @@ async function exportRecruiterApplicationsCsv(req: AuthenticatedRequest, res: im
   const jobId = String(req.query.jobId || '');
   const companyId = String(req.query.companyId || '');
   const status = String(req.query.status || '');
-  const [applications, jobs, companies, users] = await Promise.all([
-    db.listApplications(),
-    db.listJobs(),
-    db.listCompanies(),
-    db.listUsers(),
+  const scopedRecruiterId = req.user!.role === 'admin' ? null : req.user!._id;
+  const filtered = await db.listApplicationsByRecruiter(scopedRecruiterId, {
+    status: status || undefined,
+    jobId: jobId || undefined,
+    companyId: companyId || undefined,
+  });
+
+  const [jobs, companies, users, profiles] = await Promise.all([
+    db.listJobsByIds(filtered.map((a) => a.jobId)),
+    db.listCompaniesByIds(filtered.map((a) => a.companyId)),
+    db.listUsersByIds(filtered.map((a) => a.candidateId)),
+    db.listCandidateProfilesByUserIds(filtered.map((a) => a.candidateId)),
   ]);
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const companyMap = new Map(companies.map((c) => [c._id, c]));
   const userMap = new Map(users.map((u) => [u._id, u]));
-
-  const filtered = applications.filter(
-    (a) =>
-      (req.user!.role === 'admin' || a.recruiterId === req.user!._id) &&
-      (!jobId || a.jobId === jobId) &&
-      (!companyId || a.companyId === companyId) &&
-      (!status || a.status === status)
-  );
+  const profileMap = new Map(profiles.map((p) => [p.userId, p]));
 
   const header = [
     'Application ID',
@@ -435,28 +455,26 @@ async function exportRecruiterApplicationsCsv(req: AuthenticatedRequest, res: im
     'Applied Date',
   ].join(',');
 
-  const rows = await Promise.all(
-    filtered.map(async (a) => {
-      const u = userMap.get(a.candidateId);
-      const j = jobMap.get(a.jobId);
-      const c = companyMap.get(a.companyId);
-      const profile = await db.getCandidateProfile(a.candidateId);
-      const publicResumeLink = resolvePublicResumeUrl(a.resumeUrl || profile?.resumeUrl, req);
-      return [
-        csvCell(a._id),
-        csvCell(u?.name || ''),
-        csvCell(u?.email || ''),
-        csvCell(u?.phone || ''),
-        csvCell(c?.name || j?.companyName || ''),
-        csvCell(j?.title || ''),
-        csvCell(profile?.totalExperienceYears ?? 0),
-        csvCell(profile?.currentLocation || u?.location || j?.location || ''),
-        csvCell(a.status),
-        csvCell(publicResumeLink),
-        csvCell(a.appliedAt),
-      ].join(',');
-    })
-  );
+  const rows = filtered.map((a) => {
+    const u = userMap.get(a.candidateId);
+    const j = jobMap.get(a.jobId);
+    const c = companyMap.get(a.companyId);
+    const profile = profileMap.get(a.candidateId);
+    const publicResumeLink = resolvePublicResumeUrl(a.resumeUrl || profile?.resumeUrl, req);
+    return [
+      csvCell(a._id),
+      csvCell(u?.name || ''),
+      csvCell(u?.email || ''),
+      csvCell(u?.phone || ''),
+      csvCell(c?.name || j?.companyName || ''),
+      csvCell(j?.title || ''),
+      csvCell(profile?.totalExperienceYears ?? 0),
+      csvCell(profile?.currentLocation || u?.location || j?.location || ''),
+      csvCell(a.status),
+      csvCell(publicResumeLink),
+      csvCell(a.appliedAt),
+    ].join(',');
+  });
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="job-karenge-applicants.csv"');

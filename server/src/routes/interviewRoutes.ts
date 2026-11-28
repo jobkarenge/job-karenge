@@ -9,22 +9,20 @@ import { sanitizeUser } from '../utils/sanitize.ts';
 const router = Router();
 
 router.get('/', requireAuth, async (req: AuthenticatedRequest, res) => {
-  const [interviews, jobs, users, companies] = await Promise.all([
-    db.listInterviews(),
-    db.listJobs(),
-    db.listUsers(),
-    db.listCompanies(),
+  const filtered = await db.listInterviewsByUser(req.user!.role, req.user!._id);
+  if (filtered.length === 0) {
+    return res.json({ success: true, data: [] });
+  }
+
+  const jobs = await db.listJobsByIds(filtered.map((i) => i.jobId));
+  const [users, companies] = await Promise.all([
+    db.listUsersByIds([...filtered.map((i) => i.candidateId), ...filtered.map((i) => i.recruiterId)]),
+    db.listCompaniesByIds(jobs.map((j) => j.companyId)),
   ]);
 
   const jobMap = new Map(jobs.map((j) => [j._id, j]));
   const userMap = new Map(users.map((u) => [u._id, sanitizeUser(u)]));
   const companyMap = new Map(companies.map((c) => [c._id, c]));
-
-  const filtered = interviews.filter((i) => {
-    if (req.user!.role === 'admin') return true;
-    if (req.user!.role === 'recruiter') return i.recruiterId === req.user!._id;
-    return i.candidateId === req.user!._id;
-  });
 
   const enriched = filtered.map((i) => {
     const job = jobMap.get(i.jobId) || null;

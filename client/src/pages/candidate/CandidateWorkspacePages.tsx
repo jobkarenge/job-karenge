@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { EmptyState, PasswordInput, SkeletonList, StatusIndicator } from '../../components/common/UIPrimitives';
 import { JobCard } from '../../components/jobs/JobCard';
 import { useNotifications } from '../../context/NotificationContext';
-import { api, getApiErrorMessage } from '../../services/api';
+import { api, fetchCategories, getApiErrorMessage, invalidateSavedJobsCache } from '../../services/api';
 import type { EmailPreference, Interview, Job } from '../../types';
 import { formatRelativeDate } from '../../utils/formatters';
 
@@ -28,6 +28,7 @@ export function CandidateSavedJobsPage() {
 
   const handleToggleSave = async (jobId: string) => {
     await api.post(`/candidate/saved-jobs/${jobId}`);
+    invalidateSavedJobsCache();
     setItems((prev) => prev.filter((item) => item.jobId !== jobId));
     toast.success('Removed from saved jobs.');
   };
@@ -226,9 +227,9 @@ export function CandidateEmailPreferencesPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    Promise.all([api.get('/email/preferences'), api.get('/jobs/categories')]).then(([pRes, cRes]) => {
+    Promise.all([api.get('/email/preferences'), fetchCategories()]).then(([pRes, cats]) => {
       setPref(pRes.data.data);
-      setCategories((cRes.data.data || []).map((c: { name: string }) => c.name));
+      setCategories(cats.map((c) => c.name));
     });
   }, []);
 
@@ -262,11 +263,6 @@ export function CandidateEmailPreferencesPage() {
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Subscriptions &amp; Alerts</h2>
-            {pref.brevoSyncedAt && (
-              <span className="text-[11px] text-emerald-600 dark:text-emerald-400">
-                Synced with Brevo ({formatRelativeDate(pref.brevoSyncedAt)})
-              </span>
-            )}
           </div>
           {[
             { key: 'promotionalEmails', label: 'Promotional career updates and newsletters' },

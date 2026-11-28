@@ -35,6 +35,7 @@ export async function dispatchCampaignToSubscribedCandidates(campaignId: string)
 
   let sent = 0;
   let accepted = 0;
+  let delivered = campaign.stats?.delivered || 0;
   let failed = 0;
 
   for (const cand of candidates) {
@@ -74,7 +75,12 @@ export async function dispatchCampaignToSubscribedCandidates(campaignId: string)
 
     sent++;
     if (result.status === 'failed') failed++;
-    else if (result.accepted) accepted++;
+    else if (result.accepted) {
+      accepted++;
+      if (result.status === 'sent' || result.status === 'delivered') {
+        delivered++;
+      }
+    }
   }
 
   return db.updateEmailCampaign(campaign._id, {
@@ -83,7 +89,7 @@ export async function dispatchCampaignToSubscribedCandidates(campaignId: string)
       ...campaign.stats,
       sent,
       accepted,
-      delivered: campaign.stats?.delivered || 0,
+      delivered,
       failed,
       bounced: campaign.stats?.bounced || 0,
       unsubscribed: campaign.stats?.unsubscribed || 0,
